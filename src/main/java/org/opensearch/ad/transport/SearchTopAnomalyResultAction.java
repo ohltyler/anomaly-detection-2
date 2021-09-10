@@ -27,15 +27,15 @@
 package org.opensearch.ad.transport;
 
 import org.opensearch.action.ActionType;
-import org.opensearch.action.search.SearchResponse;
+import org.opensearch.ad.transport.SearchTopAnomalyResultResponse;
 import org.opensearch.ad.constant.CommonValue;
 
-public class SearchTopAnomalyResultAction extends ActionType<SearchResponse> {
+public class SearchTopAnomalyResultAction extends ActionType<SearchTopAnomalyResultResponse> {
     // External Action which used for public facing RestAPIs.
-    public static final String NAME = CommonValue.EXTERNAL_ACTION_PREFIX + "result/topAnomalies";
+    public static final String NAME = CommonValue.EXTERNAL_ACTION_PREFIX + "detector/result/topAnomalies";
     public static final SearchTopAnomalyResultAction INSTANCE = new SearchTopAnomalyResultAction();
 
     private SearchTopAnomalyResultAction() {
-        super(NAME, SearchResponse::new);
+        super(NAME, SearchTopAnomalyResultResponse::new);
     }
 }
