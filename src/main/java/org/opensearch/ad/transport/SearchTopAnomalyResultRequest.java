@@ -47,7 +47,7 @@ import static org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedT
 /**
  * Request for getting the top anomaly results for HC detectors.
  *
- * All fields are optional except start and end times
+ * size, category field, and order are optional, and will be set to default values if left blank
  */
 public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXContentObject {
 
