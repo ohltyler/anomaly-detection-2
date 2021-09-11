@@ -125,7 +125,29 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     private QueryBuilder generateQuery(SearchTopAnomalyResultRequest request) {
         QueryBuilder query = QueryBuilders.boolQuery().filter(QueryBuilders.termQuery("detector_id", request.getDetectorId()));
 
-        // TODO: add filter for historical v. realtime
+        // TODO: add filter(s) for historical v. realtime
+        /**
+         *
+         * Currently, when calling getDetector with task=true we can get the latest RT task ("realtime_detection_task")
+         * and latest historical task ("historical_analysis_task")
+         *
+         * Currently, RT results are stored without a task ID, even though there is an underlying RT task running.
+         * This is for BWC consistency purposes.
+         * Historical results are stored with an additional task ID.
+         *
+         * To differentiate on the frontend, we have to pass different filters for fetching RT v. historical results:
+         * RT:
+         *   1) term filter on detector id: e.g., "detector_id": <detector-id>
+         *   2) must_not exists filter on "task_id" (so we filter out historical results that have detector_id + task_id)
+         *
+         * Historical:
+         *   1) get latest task id (stored in "historical_analysis_task" when calling get detector API)
+         *   2) term filter on that task id: e.g., "task_id": <task-id>
+         *
+         * So, we need to have different filters here based on if the user wants RT v. historical data
+         * RT: add the same 2 filters that the frontend does
+         * Historical: make a get detector transport action call to fetch stored task ID, use returned id in a task_id filter
+         */
 
         return query;
     }
