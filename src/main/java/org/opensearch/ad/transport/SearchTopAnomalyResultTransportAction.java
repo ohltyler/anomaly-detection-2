@@ -40,12 +40,14 @@ import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.action.support.ActionFilters;
 import org.opensearch.action.support.HandledTransportAction;
+import org.opensearch.ad.model.AnomalyResult;
 import org.opensearch.ad.transport.handler.ADSearchHandler;
 import org.opensearch.common.inject.Inject;
 import org.opensearch.index.query.BoolQueryBuilder;
 import org.opensearch.index.query.ExistsQueryBuilder;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
+import org.opensearch.index.query.RangeQueryBuilder;
 import org.opensearch.index.query.TermQueryBuilder;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.AggregationBuilders;
@@ -166,20 +168,29 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
          * Historical: make a get detector transport action call to fetch stored task ID, use returned id in a task_id filter
          */
 
+        BoolQueryBuilder query = new BoolQueryBuilder();
+
+        // Add these 2 filters (needed regardless of RT vs. historical)
+        RangeQueryBuilder dateRangeFilter = QueryBuilders.rangeQuery(AnomalyResult.EXECUTION_END_TIME_FIELD).gte(request.getStartTime()).lte(request.getEndTime());
+        RangeQueryBuilder anomalyGradeFilter = QueryBuilders.rangeQuery(AnomalyResult.ANOMALY_SCORE_FIELD).gt(0);
+        query.filter(dateRangeFilter).filter(anomalyGradeFilter);
+
         if (request.getHistorical() == true) {
             // TODO: make transport action call here (?)
             String taskId = "dummy_task_id";
 
             // Task ID filter
             TermQueryBuilder taskIdFilter = QueryBuilders.termQuery("task_id", taskId);
-            return QueryBuilders.boolQuery().filter(taskIdFilter);
+            query.filter(taskIdFilter);
         } else {
             // Detector ID filter
             TermQueryBuilder detectorIdFilter = QueryBuilders.termQuery("detector_id", request.getDetectorId());
             // Must not task_id filter
             ExistsQueryBuilder taskIdFilter = QueryBuilders.existsQuery("task_id");
-            return QueryBuilders.boolQuery().filter(detectorIdFilter).mustNot(taskIdFilter);
+            query.filter(detectorIdFilter).mustNot(taskIdFilter);
         }
+
+        return query;
     }
 
     /**
