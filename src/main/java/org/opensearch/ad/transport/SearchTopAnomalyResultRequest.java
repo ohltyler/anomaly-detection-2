@@ -52,12 +52,14 @@ import static org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedT
 public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXContentObject {
 
     private static final String DETECTOR_ID_FIELD = "detector_id";
+    private static final String HISTORICAL_FIELD = "historical";
     private static final String SIZE_FIELD = "size";
     private static final String CATEGORY_FIELD_FIELD = "category_field";
     private static final String ORDER_FIELD = "order";
     private static final String START_TIME_FIELD = "start_time_ms";
     private static final String END_TIME_FIELD = "end_time_ms";
     private String detectorId;
+    private boolean historical;
     private int size;
     private List<String> categoryFields;
     private String order;
@@ -66,6 +68,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
     public SearchTopAnomalyResultRequest(StreamInput in) throws IOException {
         detectorId = in.readOptionalString();
+        historical = in.readBoolean();
         size = in.readOptionalInt();
         categoryFields = in.readOptionalStringList();
         order = in.readOptionalString();
@@ -73,10 +76,11 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
         endTime = in.readInstant();
     }
 
-    public SearchTopAnomalyResultRequest(String detectorId, int size, List<String> categoryFields, String order, Instant startTime, Instant endTime)
+    public SearchTopAnomalyResultRequest(String detectorId, boolean historical, int size, List<String> categoryFields, String order, Instant startTime, Instant endTime)
             throws IOException {
         super();
         this.detectorId = detectorId;
+        this.historical = historical;
         this.size = size;
         this.categoryFields = categoryFields;
         this.order = order;
@@ -87,6 +91,8 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
     public String getDetectorId() {
         return detectorId;
     }
+
+    public boolean getHistorical() { return historical; }
 
     public int getSize() { return size; }
 
@@ -107,6 +113,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
         XContentBuilder xContentBuilder = builder
                 .startObject()
                 .field(DETECTOR_ID_FIELD, detectorId)
+                .field(HISTORICAL_FIELD, historical)
                 .field(SIZE_FIELD, size)
                 .field(CATEGORY_FIELD_FIELD, categoryFields)
                 .field(ORDER_FIELD, order)
@@ -116,23 +123,21 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
     }
 
     @SuppressWarnings("unchecked")
-    public static SearchTopAnomalyResultRequest parse(XContentParser parser, String adId) throws IOException {
-        String detectorId = null;
+    public static SearchTopAnomalyResultRequest parse(XContentParser parser, String detectorId, boolean historical) throws IOException {
         Integer size = null;
         List<Object> categoryFields = null;
         String order = null;
         Instant startTime = null;
         Instant endTime = null;
 
+        // "detectorId" and "historical" params come from the original API path, not in the request body
+        // and therefore don't need to be parsed
         ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
         while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
             String fieldName = parser.currentName();
             parser.nextToken();
 
             switch (fieldName) {
-                case DETECTOR_ID_FIELD:
-                    detectorId = parser.text();
-                    break;
                 case SIZE_FIELD:
                     size = parser.intValue();
                     break;
@@ -152,20 +157,18 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
                     break;
             }
         }
-        if (!Strings.isNullOrEmpty(adId)) {
-            detectorId = adId;
-        }
 
         // Cast category field Object list to String list
         List<String> convertedCategoryFields = (List<String>)(List<?>)(categoryFields);
 
-        return new SearchTopAnomalyResultRequest(detectorId, size, convertedCategoryFields, order, startTime, endTime);
+        return new SearchTopAnomalyResultRequest(detectorId, historical, size, convertedCategoryFields, order, startTime, endTime);
     }
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         out.writeOptionalString(detectorId);
+        out.writeOptionalBoolean(historical);
         out.writeOptionalInt(size);
         out.writeOptionalStringCollection(categoryFields);
         out.writeInstant(startTime);

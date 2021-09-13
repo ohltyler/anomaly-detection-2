@@ -42,8 +42,11 @@ import org.opensearch.action.support.ActionFilters;
 import org.opensearch.action.support.HandledTransportAction;
 import org.opensearch.ad.transport.handler.ADSearchHandler;
 import org.opensearch.common.inject.Inject;
+import org.opensearch.index.query.BoolQueryBuilder;
+import org.opensearch.index.query.ExistsQueryBuilder;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
+import org.opensearch.index.query.TermQueryBuilder;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.AggregationBuilders;
 import org.opensearch.search.aggregations.bucket.composite.CompositeValuesSourceBuilder;
@@ -96,10 +99,15 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             }
         };
 
-        // Pass the request to the existing SearchHandler
+        // Pass the request to the SearchHandler to make the request
         searchHandler.search(searchRequest, searchListener);
     }
 
+    /**
+     * Generates the entire search request
+     * @param request the request containing the all of the user-specified parameters needed to generate the request
+     * @return the SearchRequest to pass to the SearchHandler
+     */
     private SearchRequest generateSearchRequest(SearchTopAnomalyResultRequest request) {
         SearchRequest searchRequest = new SearchRequest().indices(index);
 
@@ -122,9 +130,18 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         return searchRequest;
     }
 
+    /**
+     * Generates the query with appropriate filters on the results indices.
+     * If fetching real-time results:
+     *  1) term filter on detector_id
+     *  2) must_not filter on task_id (because real-time results don't have a 'task_id' field associated with them in the document)
+     * If fetching historical results:
+     *  1) get the latest historical_analysis_task ID via get detector transport action
+     *  2) term filter on the task_id
+     * @param request the request containing the detector ID and whether or not to fetch real-time or historical results
+     * @return the generated query as a QueryBuilder
+     */
     private QueryBuilder generateQuery(SearchTopAnomalyResultRequest request) {
-        QueryBuilder query = QueryBuilders.boolQuery().filter(QueryBuilders.termQuery("detector_id", request.getDetectorId()));
-
         // TODO: add filter(s) for historical v. realtime
         /**
          *
@@ -149,9 +166,27 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
          * Historical: make a get detector transport action call to fetch stored task ID, use returned id in a task_id filter
          */
 
-        return query;
+        if (request.getHistorical() == true) {
+            // TODO: make transport action call here (?)
+            String taskId = "dummy_task_id";
+
+            // Task ID filter
+            TermQueryBuilder taskIdFilter = QueryBuilders.termQuery("task_id", taskId);
+            return QueryBuilders.boolQuery().filter(taskIdFilter);
+        } else {
+            // Detector ID filter
+            TermQueryBuilder detectorIdFilter = QueryBuilders.termQuery("detector_id", request.getDetectorId());
+            // Must not task_id filter
+            ExistsQueryBuilder taskIdFilter = QueryBuilders.existsQuery("task_id");
+            return QueryBuilders.boolQuery().filter(detectorIdFilter).mustNot(taskIdFilter);
+        }
     }
 
+    /**
+     *
+     * @param request the request containing the all of the user-specified parameters needed to generate the request
+     * @return the generated aggregation as an AggregationBuilder
+     */
     // Generates a composite aggregation, with the sources being the different
     // category fields the user wants to filter by
     private AggregationBuilder generateAggregation(SearchTopAnomalyResultRequest request) {

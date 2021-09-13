@@ -103,21 +103,24 @@ public class RestSearchTopAnomalyResultAction extends BaseRestHandler {
     }
 
     private SearchTopAnomalyResultRequest getSearchTopAnomalyResultRequest(RestRequest request) throws IOException {
-        String detectorId = null;
+        String detectorId;
         if (request.hasParam(DETECTOR_ID)) {
             detectorId = request.param(DETECTOR_ID);
+        } else {
+            throw new IllegalStateException(CommonErrorMessages.AD_ID_MISSING_MSG);
         }
-
+        boolean historical = request.paramAsBoolean("historical", false);
         XContentParser parser = request.contentParser();
         ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
-        SearchTopAnomalyResultRequest req = SearchTopAnomalyResultRequest.parse(parser, detectorId);
+        SearchTopAnomalyResultRequest req = SearchTopAnomalyResultRequest.parse(parser, detectorId, historical);
 
-        logger.log(Level.INFO, req.getDetectorId());
-        logger.log(Level.INFO, req.getSize());
-        logger.log(Level.INFO, req.getCategoryFields());
-        logger.log(Level.INFO, req.getOrder());
-        logger.log(Level.INFO, req.getStartTime());
-        logger.log(Level.INFO, req.getEndTime());
+        logger.info(req.getDetectorId());
+        logger.info(req.getHistorical());
+        logger.info(req.getSize());
+        logger.info(req.getCategoryFields());
+        logger.info(req.getOrder());
+        logger.info(req.getStartTime());
+        logger.info(req.getEndTime());
         return req;
     }
 
@@ -127,31 +130,6 @@ public class RestSearchTopAnomalyResultAction extends BaseRestHandler {
         return new RestResponseListener<SearchTopAnomalyResultResponse>(channel) {
             @Override
             public RestResponse buildResponse(SearchTopAnomalyResultResponse response) throws Exception {
-                // TODO: see what needs to be built to convert the transport-level response (SearchTopAnomalyResultResponse) to REST-level response (RestResponse)
-//                if (response.isTimedOut()) {
-//                    return new BytesRestResponse(RestStatus.REQUEST_TIMEOUT, response.toString());
-//                }
-//
-//                if (clazz == AnomalyDetector.class) {
-//                    for (SearchHit hit : response.getHits()) {
-//                        XContentParser parser = XContentType.JSON
-//                                .xContent()
-//                                .createParser(
-//                                        channel.request().getXContentRegistry(),
-//                                        LoggingDeprecationHandler.INSTANCE,
-//                                        hit.getSourceAsString()
-//                                );
-//                        ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
-//
-//                        // write back id and version to anomaly detector object
-//                        ToXContentObject xContentObject = AnomalyDetector.parse(parser, hit.getId(), hit.getVersion());
-//                        XContentBuilder builder = xContentObject.toXContent(jsonBuilder(), EMPTY_PARAMS);
-//                        hit.sourceRef(BytesReference.bytes(builder));
-//                    }
-//                }
-
-                logger.info("response:\n" + response);
-
                 return new BytesRestResponse(RestStatus.OK, response.toXContent(channel.newBuilder(), EMPTY_PARAMS));
             }
         };
