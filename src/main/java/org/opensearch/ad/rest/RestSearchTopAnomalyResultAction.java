@@ -113,15 +113,6 @@ public class RestSearchTopAnomalyResultAction extends BaseRestHandler {
         XContentParser parser = request.contentParser();
         ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
         SearchTopAnomalyResultRequest req = SearchTopAnomalyResultRequest.parse(parser, detectorId, historical);
-
-        logger.info(req.getDetectorId());
-        logger.info(req.getTaskId());
-        logger.info(req.getHistorical());
-        logger.info(req.getSize());
-        logger.info(req.getCategoryFields());
-        logger.info(req.getOrder());
-        logger.info(req.getStartTime());
-        logger.info(req.getEndTime());
         return req;
     }
 

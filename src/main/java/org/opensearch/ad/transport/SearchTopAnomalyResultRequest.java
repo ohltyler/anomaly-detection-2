@@ -116,6 +116,8 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
         return endTime;
     }
 
+    public void setTaskId (String taskId) { this.taskId = taskId; }
+
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         XContentBuilder xContentBuilder = builder
