@@ -90,16 +90,16 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     @Override
     protected void doExecute(Task task, SearchTopAnomalyResultRequest request, ActionListener<SearchTopAnomalyResultResponse> listener) {
 
-        // Make a call to the get anomaly detector transport action to get the latest task ID, which is necessary for fetching historical results
         GetAnomalyDetectorRequest getAdRequest = new GetAnomalyDetectorRequest(request.getDetectorId(), -3L, false, true, "", "", false, null);
         client.execute(GetAnomalyDetectorAction.INSTANCE, getAdRequest, ActionListener.wrap(getAdResponse -> {
 
-            // If we want to retrieve historical results and no task ID was originally passed: save the task ID info
+            // If we want to retrieve historical results and no task ID was originally passed: make a transport action call
+            // to get the latest historical task ID
             if (request.getHistorical() == true && Strings.isNullOrEmpty(request.getTaskId())) {
                 ADTask historicalTask = getAdResponse.getHistoricalAdTask();
                 if (historicalTask == null) {
                     logger.error("No historical task found");
-                    throw new IllegalArgumentException("No historical task found");
+                    throw new ResourceNotFoundException("No historical task found");
                 } else {
                     request.setTaskId(historicalTask.getTaskId());
                 }
@@ -107,7 +107,6 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
             // Generating the search request which will contain the generated query
             SearchRequest searchRequest = generateSearchRequest(request);
-
 
             // TODO: remove these 5 lines later. Just for debugging purposes / pretty printing in console
             JsonParser parser = new JsonParser();
@@ -118,32 +117,16 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
 
             // Creating a listener of appropriate type to pass to the SearchHandler
-            ActionListener<SearchResponse> searchListener = new ActionListener<SearchResponse>() {
-                @Override
-                public void onResponse(SearchResponse searchResponse) {
+            ActionListener<SearchResponse> searchListener = getSearchListener(listener);
 
-                    // TODO: convert the searchResponse back to SearchTopAnomalyResultResponse
-
-                    List<AnomalyResultBucket> results = new ArrayList<AnomalyResultBucket>();
-                    SearchTopAnomalyResultResponse response = new SearchTopAnomalyResultResponse(results);
-                    listener.onResponse(response);
-                    return;
-                }
-
-                @Override
-                public void onFailure(Exception e) {
-                    listener.onFailure(e);
-                    return;
-                }
-            };
-
-            // Pass the request to the SearchHandler to make the request
+            // Execute the search
             searchHandler.search(searchRequest, searchListener);
 
         }, exception -> {
-            logger.error("Failed to get anomaly detector", exception);
+            logger.error("Failed to get anomaly detector or historical task", exception.getMessage());
             listener.onFailure(exception);
         }));
+
     }
 
     /**
@@ -222,12 +205,11 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     }
 
     /**
+     * Generates the composite aggregation, creating a list of sources based on set of user-specified category fields
      *
      * @param request the request containing the all of the user-specified parameters needed to generate the request
      * @return the generated aggregation as an AggregationBuilder
      */
-    // Generates a composite aggregation, with the sources being the different
-    // category fields the user wants to filter by
     private AggregationBuilder generateAggregation(SearchTopAnomalyResultRequest request) {
         List<CompositeValuesSourceBuilder<?>> sources = new ArrayList<>();
         sources.add(new TermsValuesSourceBuilder("field1").field("field1"));
@@ -235,6 +217,33 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
 
         return aggregation;
+    }
+
+    /**
+     * Gets a SearchResponse listener that handles conversion from SearchResponse back to SearchTopAnomalyResultResponse
+     * @param listener the base transport action listener
+     * @return a new SearchResponse listener
+     */
+    private ActionListener<SearchResponse> getSearchListener (ActionListener<SearchTopAnomalyResultResponse> listener) {
+        // Creating a listener of appropriate type to pass to the SearchHandler
+        return new ActionListener<SearchResponse>() {
+            @Override
+            public void onResponse(SearchResponse searchResponse) {
+
+                // TODO: convert the searchResponse back to SearchTopAnomalyResultResponse
+
+                List<AnomalyResultBucket> results = new ArrayList<AnomalyResultBucket>();
+                SearchTopAnomalyResultResponse response = new SearchTopAnomalyResultResponse(results);
+                listener.onResponse(response);
+                return;
+            }
+
+            @Override
+            public void onFailure(Exception e) {
+                listener.onFailure(e);
+                return;
+            }
+        };
     }
 
 
