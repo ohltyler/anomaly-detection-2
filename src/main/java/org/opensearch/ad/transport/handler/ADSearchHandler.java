@@ -80,7 +80,6 @@ public class ADSearchHandler {
         if (user == null || !filterEnabled) {
             // Case 1: user == null when 1. Security is disabled. 2. When user is super-admin
             // Case 2: If Security is enabled and filter is disabled, proceed with search as
-            logger.info("sending request to ES");
             // user is already authenticated to hit this API.
             client.search(request, listener);
         } else {

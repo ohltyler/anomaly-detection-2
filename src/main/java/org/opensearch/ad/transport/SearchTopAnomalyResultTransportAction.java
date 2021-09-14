@@ -35,20 +35,28 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.opensearch.OpenSearchStatusException;
 import org.opensearch.action.ActionListener;
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.action.support.ActionFilters;
 import org.opensearch.action.support.HandledTransportAction;
+import org.opensearch.ad.common.exception.AnomalyDetectionException;
+import org.opensearch.ad.common.exception.ResourceNotFoundException;
+import org.opensearch.ad.model.ADTask;
 import org.opensearch.ad.model.AnomalyResult;
 import org.opensearch.ad.transport.handler.ADSearchHandler;
 import org.opensearch.common.inject.Inject;
+import org.opensearch.common.Strings;
+import org.opensearch.common.xcontent.ToXContent;
+import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.index.query.BoolQueryBuilder;
 import org.opensearch.index.query.ExistsQueryBuilder;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.index.query.RangeQueryBuilder;
 import org.opensearch.index.query.TermQueryBuilder;
+import org.opensearch.rest.action.RestToXContentListener;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.AggregationBuilders;
 import org.opensearch.search.aggregations.bucket.composite.CompositeValuesSourceBuilder;
@@ -57,6 +65,7 @@ import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.tasks.Task;
 import org.opensearch.transport.TransportService;
 import org.opensearch.ad.model.AnomalyResultBucket;
+import org.opensearch.client.Client;
 
 import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_INDEX_PATTERN;
 
@@ -64,22 +73,27 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     private ADSearchHandler searchHandler;
     private static final String index = ALL_AD_RESULTS_INDEX_PATTERN;
     private static final Logger logger = LogManager.getLogger(SearchTopAnomalyResultTransportAction.class);
+    private final Client client;
 
     @Inject
     public SearchTopAnomalyResultTransportAction(
             TransportService transportService,
             ActionFilters actionFilters,
-            ADSearchHandler searchHandler
+            ADSearchHandler searchHandler,
+            Client client
     ) {
         super(SearchTopAnomalyResultAction.NAME, transportService, actionFilters, SearchTopAnomalyResultRequest::new);
         this.searchHandler = searchHandler;
+        this.client = client;
     }
 
     @Override
     protected void doExecute(Task task, SearchTopAnomalyResultRequest request, ActionListener<SearchTopAnomalyResultResponse> listener) {
 
+        // TODO: maybe create a listener of type string. When any relevant task id is returned, we execute the rest of the logic in the onResponse() overridden method.
+
         // Generating the search request which will contain the generated query
-        SearchRequest searchRequest = generateSearchRequest(request);
+        SearchRequest searchRequest = generateSearchRequest(request, listener);
 
         // Creating a listener of appropriate type to pass to the SearchHandler
         ActionListener<SearchResponse> searchListener = new ActionListener<SearchResponse>() {
@@ -110,11 +124,11 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
      * @param request the request containing the all of the user-specified parameters needed to generate the request
      * @return the SearchRequest to pass to the SearchHandler
      */
-    private SearchRequest generateSearchRequest(SearchTopAnomalyResultRequest request) {
+    private SearchRequest generateSearchRequest(SearchTopAnomalyResultRequest request, ActionListener<SearchTopAnomalyResultResponse> listener) {
         SearchRequest searchRequest = new SearchRequest().indices(index);
 
         // Generate the query for the request
-        QueryBuilder query = generateQuery(request);
+        QueryBuilder query = generateQuery(request, listener);
 
         // Generate the aggregation for the request
         AggregationBuilder aggregation = generateAggregation(request);
@@ -143,7 +157,7 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
      * @param request the request containing the detector ID and whether or not to fetch real-time or historical results
      * @return the generated query as a QueryBuilder
      */
-    private QueryBuilder generateQuery(SearchTopAnomalyResultRequest request) {
+    private QueryBuilder generateQuery(SearchTopAnomalyResultRequest request, ActionListener<SearchTopAnomalyResultResponse> listener) {
         // TODO: add filter(s) for historical v. realtime
         /**
          *
@@ -176,8 +190,52 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         query.filter(dateRangeFilter).filter(anomalyGradeFilter);
 
         if (request.getHistorical() == true) {
-            // TODO: make transport action call here (?)
-            String taskId = "dummy_task_id";
+
+            // If no task ID is passed: retrieve the latest from the detector info
+            // otherwise use the user-specified task ID
+            String taskId = null;
+            if (Strings.isNullOrEmpty(request.getTaskId())) {
+                // make transport action call to get detector info, in order to retrieve the latest task ID
+
+                // Create the ActionListener to wait for the response
+                ActionListener<GetAnomalyDetectorResponse> getAnomalyDetectorListener = new ActionListener<GetAnomalyDetectorResponse>() {
+                    @Override
+                    public void onResponse(GetAnomalyDetectorResponse getAnomalyDetectorResponse) {
+                        ADTask historicalTask = getAnomalyDetectorResponse.getHistoricalAdTask();
+                        if (historicalTask == null) {
+                            //listener.onFailure(new AnomalyDetectionException(request.getDetectorId(), "No historical task found"));
+                            //throw new IllegalArgumentException("No historical task found");
+                            logger.error("No historical task found");
+                            //return;
+                        } else {
+                            logger.info("succeeded: task id in response: " + getAnomalyDetectorResponse.getHistoricalAdTask().getTaskId());
+                            //String taskId = historicalTask.getTaskId();
+                            //TermQueryBuilder taskIdFilter = QueryBuilders.termQuery("task_id", historicalTask.getTaskId());
+                            //query.filter(taskIdFilter);
+                            return;
+                        }
+                    }
+
+                    @Override
+                    public void onFailure(Exception e) {
+                        listener.onFailure(e);
+                        logger.info("failed! exception: " + e.getMessage());
+                        return;
+                    }
+                };
+
+                // Create the request to pass
+                GetAnomalyDetectorRequest getAdRequest = new GetAnomalyDetectorRequest(request.getDetectorId(), -3L, false, true, "", "", false, null);
+
+                // Execute the transport action
+                client.execute(GetAnomalyDetectorAction.INSTANCE, getAdRequest, getAnomalyDetectorListener);
+
+                // TODO: override this with some task id derived from the response in the listener declared above
+                taskId = "from-transport-action";
+            } else {
+                taskId = request.getTaskId();
+            }
+            logger.info("TASK ID passed: " + taskId);
 
             // Task ID filter
             TermQueryBuilder taskIdFilter = QueryBuilders.termQuery("task_id", taskId);

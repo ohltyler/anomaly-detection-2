@@ -52,6 +52,7 @@ import static org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedT
 public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXContentObject {
 
     private static final String DETECTOR_ID_FIELD = "detector_id";
+    private static final String TASK_ID_FIELD = "task_id";
     private static final String HISTORICAL_FIELD = "historical";
     private static final String SIZE_FIELD = "size";
     private static final String CATEGORY_FIELD_FIELD = "category_field";
@@ -59,6 +60,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
     private static final String START_TIME_FIELD = "start_time_ms";
     private static final String END_TIME_FIELD = "end_time_ms";
     private String detectorId;
+    private String taskId;
     private boolean historical;
     private int size;
     private List<String> categoryFields;
@@ -68,6 +70,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
     public SearchTopAnomalyResultRequest(StreamInput in) throws IOException {
         detectorId = in.readOptionalString();
+        taskId = in.readOptionalString();
         historical = in.readBoolean();
         size = in.readOptionalInt();
         categoryFields = in.readOptionalStringList();
@@ -76,10 +79,11 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
         endTime = in.readInstant();
     }
 
-    public SearchTopAnomalyResultRequest(String detectorId, boolean historical, int size, List<String> categoryFields, String order, Instant startTime, Instant endTime)
+    public SearchTopAnomalyResultRequest(String detectorId, String taskId, boolean historical, int size, List<String> categoryFields, String order, Instant startTime, Instant endTime)
             throws IOException {
         super();
         this.detectorId = detectorId;
+        this.taskId = taskId;
         this.historical = historical;
         this.size = size;
         this.categoryFields = categoryFields;
@@ -90,6 +94,10 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
     public String getDetectorId() {
         return detectorId;
+    }
+
+    public String getTaskId() {
+        return taskId;
     }
 
     public boolean getHistorical() { return historical; }
@@ -113,6 +121,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
         XContentBuilder xContentBuilder = builder
                 .startObject()
                 .field(DETECTOR_ID_FIELD, detectorId)
+                .field(TASK_ID_FIELD, taskId)
                 .field(HISTORICAL_FIELD, historical)
                 .field(SIZE_FIELD, size)
                 .field(CATEGORY_FIELD_FIELD, categoryFields)
@@ -124,6 +133,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
     @SuppressWarnings("unchecked")
     public static SearchTopAnomalyResultRequest parse(XContentParser parser, String detectorId, boolean historical) throws IOException {
+        String taskId = null;
         Integer size = null;
         List<Object> categoryFields = null;
         String order = null;
@@ -138,6 +148,9 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
             parser.nextToken();
 
             switch (fieldName) {
+                case TASK_ID_FIELD:
+                    taskId = parser.text();
+                    break;
                 case SIZE_FIELD:
                     size = parser.intValue();
                     break;
@@ -161,13 +174,14 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
         // Cast category field Object list to String list
         List<String> convertedCategoryFields = (List<String>)(List<?>)(categoryFields);
 
-        return new SearchTopAnomalyResultRequest(detectorId, historical, size, convertedCategoryFields, order, startTime, endTime);
+        return new SearchTopAnomalyResultRequest(detectorId, taskId, historical, size, convertedCategoryFields, order, startTime, endTime);
     }
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         out.writeOptionalString(detectorId);
+        out.writeOptionalString(taskId);
         out.writeOptionalBoolean(historical);
         out.writeOptionalInt(size);
         out.writeOptionalStringCollection(categoryFields);

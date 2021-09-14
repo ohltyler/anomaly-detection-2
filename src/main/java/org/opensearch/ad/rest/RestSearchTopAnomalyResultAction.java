@@ -115,6 +115,7 @@ public class RestSearchTopAnomalyResultAction extends BaseRestHandler {
         SearchTopAnomalyResultRequest req = SearchTopAnomalyResultRequest.parse(parser, detectorId, historical);
 
         logger.info(req.getDetectorId());
+        logger.info(req.getTaskId());
         logger.info(req.getHistorical());
         logger.info(req.getSize());
         logger.info(req.getCategoryFields());
