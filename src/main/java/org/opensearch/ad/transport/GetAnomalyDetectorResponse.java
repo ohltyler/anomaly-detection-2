@@ -219,4 +219,12 @@ public class GetAnomalyDetectorResponse extends ActionResponse implements ToXCon
     public ADTask getHistoricalAdTask() {
         return historicalAdTask;
     }
+
+    public AnomalyDetector getAnomalyDetector() {
+        return detector;
+    }
+
+    public String getId() {
+        return id;
+    }
 }

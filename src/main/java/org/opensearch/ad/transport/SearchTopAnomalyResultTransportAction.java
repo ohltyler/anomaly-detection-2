@@ -93,6 +93,30 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         GetAnomalyDetectorRequest getAdRequest = new GetAnomalyDetectorRequest(request.getDetectorId(), -3L, false, true, "", "", false, null);
         client.execute(GetAnomalyDetectorAction.INSTANCE, getAdRequest, ActionListener.wrap(getAdResponse -> {
 
+            // Get category fields and run some validation
+            List<String> categoryFieldsFromResponse = getAdResponse.getAnomalyDetector().getCategoryField();
+
+            // Make sure detector is HC
+            if (categoryFieldsFromResponse == null || categoryFieldsFromResponse.isEmpty()) {
+                throw new IllegalArgumentException(String.format("No category fields found for detector %s", getAdResponse.getId()));
+            }
+
+            // Get the list of category fields if the user didn't specify any
+            if (request.getCategoryFields() == null || request.getCategoryFields().isEmpty()) {
+                request.setCategoryFields(categoryFieldsFromResponse);
+            } else {
+                if (request.getCategoryFields().size() > categoryFieldsFromResponse.size()) {
+                    throw new IllegalArgumentException("Too many category fields specified. Please select a subset");
+                }
+                // Make sure all specified fields exist in the actual detector
+                for (String categoryField : request.getCategoryFields()) {
+                    if (!categoryFieldsFromResponse.contains(categoryField)) {
+                        throw new IllegalArgumentException(String.format("Category field %s doesn't exist for detector %s", categoryField, getAdResponse.getId()));
+                    }
+                }
+            }
+
+
             // If we want to retrieve historical results and no task ID was originally passed: make a transport action call
             // to get the latest historical task ID
             if (request.getHistorical() == true && Strings.isNullOrEmpty(request.getTaskId())) {
@@ -123,7 +147,7 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             searchHandler.search(searchRequest, searchListener);
 
         }, exception -> {
-            logger.error("Failed to get anomaly detector or historical task", exception.getMessage());
+            logger.error("Failed to get top anomaly results", exception);
             listener.onFailure(exception);
         }));
 

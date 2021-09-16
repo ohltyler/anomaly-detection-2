@@ -118,6 +118,10 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
     public void setTaskId (String taskId) { this.taskId = taskId; }
 
+    public void setCategoryFields (List<String> categoryFields) {
+        this.categoryFields = categoryFields;
+    }
+
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         XContentBuilder xContentBuilder = builder
