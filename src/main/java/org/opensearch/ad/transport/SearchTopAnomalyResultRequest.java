@@ -118,6 +118,8 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
     public void setTaskId (String taskId) { this.taskId = taskId; }
 
+    public void setOrder (String order) { this.order = order; }
+
     public void setCategoryFields (List<String> categoryFields) {
         this.categoryFields = categoryFields;
     }

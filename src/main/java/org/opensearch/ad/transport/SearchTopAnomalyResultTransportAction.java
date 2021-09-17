@@ -26,9 +26,11 @@
 
 package org.opensearch.ad.transport;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.gson.Gson;
@@ -37,6 +39,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.config.Order;
 import org.opensearch.OpenSearchStatusException;
 import org.opensearch.action.ActionListener;
 import org.opensearch.action.search.SearchRequest;
@@ -63,10 +66,16 @@ import org.opensearch.script.ScriptType;
 import org.opensearch.search.aggregations.Aggregation;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.AggregationBuilders;
+import org.opensearch.search.aggregations.BucketOrder;
+import org.opensearch.search.aggregations.PipelineAggregatorBuilders;
+import org.opensearch.search.aggregations.bucket.MultiBucketsAggregation;
 import org.opensearch.search.aggregations.bucket.composite.CompositeValuesSourceBuilder;
 import org.opensearch.search.aggregations.bucket.composite.TermsValuesSourceBuilder;
+import org.opensearch.search.aggregations.pipeline.BucketSortPipelineAggregationBuilder;
 import org.opensearch.search.aggregations.support.ValuesSource;
 import org.opensearch.search.builder.SearchSourceBuilder;
+import org.opensearch.search.sort.FieldSortBuilder;
+import org.opensearch.search.sort.SortOrder;
 import org.opensearch.tasks.Task;
 import org.opensearch.transport.TransportService;
 import org.opensearch.ad.model.AnomalyResultBucket;
@@ -79,6 +88,19 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     private static final String index = ALL_AD_RESULTS_INDEX_PATTERN;
     private static final Logger logger = LogManager.getLogger(SearchTopAnomalyResultTransportAction.class);
     private final Client client;
+    private enum OrderType {
+        SEVERITY("severity"),
+        OCCURRENCE("occurrence");
+        private String name;
+
+        OrderType(String name) {
+            this.name = name;
+        }
+
+        public String getName() {
+            return name;
+        }
+    }
 
     @Inject
     public SearchTopAnomalyResultTransportAction(
@@ -130,6 +152,23 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                     request.setTaskId(historicalTask.getTaskId());
                 }
             }
+
+            // Make sure the order passed is valid
+            OrderType orderType;
+            String orderString = request.getOrder();
+            if (Strings.isNullOrEmpty(orderString)) {
+                orderType = OrderType.SEVERITY;
+            } else {
+                if (orderString.equals(OrderType.SEVERITY.getName())) {
+                    orderType = OrderType.SEVERITY;
+                } else if (orderString.equals(OrderType.OCCURRENCE.getName())) {
+                    orderType = OrderType.OCCURRENCE;
+                } else {
+                    // No valid order type was passed, throw an error
+                    throw new IllegalArgumentException(String.format("Order %s is not a valid order", orderString));
+                }
+            }
+            request.setOrder(orderType.getName());
 
             // Generating the search request which will contain the generated query
             SearchRequest searchRequest = generateSearchRequest(request);
@@ -217,7 +256,11 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             sources.add(new TermsValuesSourceBuilder(categoryField).script(script));
         }
 
-        AggregationBuilder aggregation = AggregationBuilders.composite("multi_buckets", sources);
+        // TODO: add the bucket aggregation here, based on the user-specified agg type (severity or occurrence)
+
+        AggregationBuilder bucketAggregation = getBucketAggregation(request.getOrder());
+
+        AggregationBuilder aggregation = AggregationBuilders.composite("multi_buckets", sources).subAggregation(bucketAggregation);
 
 
         return aggregation;
@@ -273,6 +316,20 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
         // The last argument contains the K/V pair to inject the categoryField value into the script
         return new Script(ScriptType.INLINE, "painless", builder.toString(), Collections.EMPTY_MAP, ImmutableMap.of("categoryField", categoryField));
+    }
+
+    private AggregationBuilder getBucketAggregation(String order) {
+        // TODO: use order to determine the agg type here
+        List fieldSortList = new ArrayList<>();
+        fieldSortList.add(new FieldSortBuilder("max").order(SortOrder.DESC));
+        BucketSortPipelineAggregationBuilder bucketSort = PipelineAggregatorBuilders.bucketSort("multi_buckets_sort", fieldSortList);
+        AggregationBuilder max = AggregationBuilders.max("max").field(AnomalyResult.ANOMALY_SCORE_FIELD);
+
+        // TODO: this is being nested in the max aggregation, rather than just used in the bucket sort.
+        // it's failing since the "max" name is not getting recognized
+        AggregationBuilder aggregation = max.subAggregation(bucketSort);
+
+        return aggregation;
     }
 
 }
