@@ -27,8 +27,10 @@
 package org.opensearch.ad.transport;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
@@ -56,11 +58,14 @@ import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.index.query.RangeQueryBuilder;
 import org.opensearch.index.query.TermQueryBuilder;
-import org.opensearch.rest.action.RestToXContentListener;
+import org.opensearch.script.Script;
+import org.opensearch.script.ScriptType;
+import org.opensearch.search.aggregations.Aggregation;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.AggregationBuilders;
 import org.opensearch.search.aggregations.bucket.composite.CompositeValuesSourceBuilder;
 import org.opensearch.search.aggregations.bucket.composite.TermsValuesSourceBuilder;
+import org.opensearch.search.aggregations.support.ValuesSource;
 import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.tasks.Task;
 import org.opensearch.transport.TransportService;
@@ -93,12 +98,10 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         GetAnomalyDetectorRequest getAdRequest = new GetAnomalyDetectorRequest(request.getDetectorId(), -3L, false, true, "", "", false, null);
         client.execute(GetAnomalyDetectorAction.INSTANCE, getAdRequest, ActionListener.wrap(getAdResponse -> {
 
-            // Get category fields and run some validation
-            List<String> categoryFieldsFromResponse = getAdResponse.getAnomalyDetector().getCategoryField();
-
             // Make sure detector is HC
+            List<String> categoryFieldsFromResponse = getAdResponse.getAnomalyDetector().getCategoryField();
             if (categoryFieldsFromResponse == null || categoryFieldsFromResponse.isEmpty()) {
-                throw new IllegalArgumentException(String.format("No category fields found for detector %s", getAdResponse.getId()));
+                throw new IllegalArgumentException(String.format("No category fields found for detector %s", request.getDetectorId()));
             }
 
             // Get the list of category fields if the user didn't specify any
@@ -108,10 +111,9 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                 if (request.getCategoryFields().size() > categoryFieldsFromResponse.size()) {
                     throw new IllegalArgumentException("Too many category fields specified. Please select a subset");
                 }
-                // Make sure all specified fields exist in the actual detector
                 for (String categoryField : request.getCategoryFields()) {
                     if (!categoryFieldsFromResponse.contains(categoryField)) {
-                        throw new IllegalArgumentException(String.format("Category field %s doesn't exist for detector %s", categoryField, getAdResponse.getId()));
+                        throw new IllegalArgumentException(String.format("Category field %s doesn't exist for detector %s", categoryField, request.getDetectorId()));
                     }
                 }
             }
@@ -179,36 +181,11 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
      *  1) term filter on detector_id
      *  2) must_not filter on task_id (because real-time results don't have a 'task_id' field associated with them in the document)
      * If fetching historical results:
-     *  1) get the latest historical_analysis_task ID via get detector transport action
-     *  2) term filter on the task_id
+     *  1) term filter on the task_id
      * @param request the request containing the detector ID and whether or not to fetch real-time or historical results
      * @return the generated query as a QueryBuilder
      */
     private QueryBuilder generateQuery(SearchTopAnomalyResultRequest request) {
-        // TODO: add filter(s) for historical v. realtime
-        /**
-         *
-         * Currently, when calling getDetector with task=true we can get the latest RT task ("realtime_detection_task")
-         * and latest historical task ("historical_analysis_task")
-         *
-         * Currently, RT results are stored without a task ID, even though there is an underlying RT task running.
-         * This is for BWC consistency purposes.
-         * Historical results are stored with an additional task ID.
-         *
-         * To differentiate on the frontend, we have to pass different filters for fetching RT v. historical results:
-         * RT:
-         *   1) term filter on detector id: e.g., "detector_id": <detector-id>
-         *   2) must_not exists filter on "task_id" (so we filter out historical results that have detector_id + task_id)
-         *
-         * Historical:
-         *   1) get latest task id (stored in "historical_analysis_task" when calling get detector API)
-         *   2) term filter on that task id: e.g., "task_id": <task-id>
-         *
-         * So, we need to have different filters here based on if the user wants RT v. historical data
-         * RT: add the same 2 filters that the frontend does
-         * Historical: make a get detector transport action call to fetch stored task ID, use returned id in a task_id filter
-         */
-
         BoolQueryBuilder query = new BoolQueryBuilder();
 
         // Add these 2 filters (needed regardless of RT vs. historical)
@@ -224,7 +201,6 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             ExistsQueryBuilder taskIdFilter = QueryBuilders.existsQuery(AnomalyResult.TASK_ID_FIELD);
             query.filter(detectorIdFilter).mustNot(taskIdFilter);
         }
-
         return query;
     }
 
@@ -236,7 +212,11 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
      */
     private AggregationBuilder generateAggregation(SearchTopAnomalyResultRequest request) {
         List<CompositeValuesSourceBuilder<?>> sources = new ArrayList<>();
-        sources.add(new TermsValuesSourceBuilder("field1").field("field1"));
+        for (String categoryField : request.getCategoryFields()) {
+            Script script = getScriptForCategoryField(categoryField);
+            sources.add(new TermsValuesSourceBuilder(categoryField).script(script));
+        }
+
         AggregationBuilder aggregation = AggregationBuilders.composite("multi_buckets", sources);
 
 
@@ -255,6 +235,8 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             public void onResponse(SearchResponse searchResponse) {
 
                 // TODO: convert the searchResponse back to SearchTopAnomalyResultResponse
+                List<Aggregation> aggs = searchResponse.getAggregations().asList();
+                logger.info("aggs: " + aggs);
 
                 List<AnomalyResultBucket> results = new ArrayList<AnomalyResultBucket>();
                 SearchTopAnomalyResultResponse response = new SearchTopAnomalyResultResponse(results);
@@ -270,5 +252,27 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         };
     }
 
+    /**
+     *
+     * @param categoryField the category field to be used as a source
+     * @return the painless script used to get all docs with entity name values matching the category field
+     */
+    private Script getScriptForCategoryField(String categoryField) {
+        StringBuilder builder = new StringBuilder()
+        .append("String value = null;")
+        .append("if (params == null || params._source == null || params._source.entity == null) {")
+        .append("return \"\"")
+        .append("}")
+        .append("for (item in params._source.entity) {")
+        .append("if (item[\"name\"] == params[\"categoryField\"]) {")
+        .append("value = item['value'];")
+        .append("break;")
+        .append("}")
+        .append("}")
+        .append("return value;");
+
+        // The last argument contains the K/V pair to inject the categoryField value into the script
+        return new Script(ScriptType.INLINE, "painless", builder.toString(), Collections.EMPTY_MAP, ImmutableMap.of("categoryField", categoryField));
+    }
 
 }

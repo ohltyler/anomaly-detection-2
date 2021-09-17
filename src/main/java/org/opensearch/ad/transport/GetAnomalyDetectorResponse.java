@@ -223,8 +223,4 @@ public class GetAnomalyDetectorResponse extends ActionResponse implements ToXCon
     public AnomalyDetector getAnomalyDetector() {
         return detector;
     }
-
-    public String getId() {
-        return id;
-    }
 }
