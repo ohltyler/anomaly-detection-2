@@ -258,12 +258,11 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
         // TODO: add the bucket aggregation here, based on the user-specified agg type (severity or occurrence)
 
+        // get the 2 subaggregations
         AggregationBuilder bucketAggregation = getBucketAggregation(request.getOrder());
+        BucketSortPipelineAggregationBuilder bucketSort = getBucketSort();
 
-        AggregationBuilder aggregation = AggregationBuilders.composite("multi_buckets", sources).subAggregation(bucketAggregation);
-
-
-        return aggregation;
+        return AggregationBuilders.composite("multi_buckets", sources).subAggregation(bucketAggregation).subAggregation(bucketSort);
     }
 
     /**
@@ -319,17 +318,15 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     }
 
     private AggregationBuilder getBucketAggregation(String order) {
-        // TODO: use order to determine the agg type here
+
+         // TODO: use order to determine the agg type here
+        return AggregationBuilders.max("max").field(AnomalyResult.ANOMALY_SCORE_FIELD);
+    }
+
+    private BucketSortPipelineAggregationBuilder getBucketSort() {
         List fieldSortList = new ArrayList<>();
         fieldSortList.add(new FieldSortBuilder("max").order(SortOrder.DESC));
-        BucketSortPipelineAggregationBuilder bucketSort = PipelineAggregatorBuilders.bucketSort("multi_buckets_sort", fieldSortList);
-        AggregationBuilder max = AggregationBuilders.max("max").field(AnomalyResult.ANOMALY_SCORE_FIELD);
-
-        // TODO: this is being nested in the max aggregation, rather than just used in the bucket sort.
-        // it's failing since the "max" name is not getting recognized
-        AggregationBuilder aggregation = max.subAggregation(bucketSort);
-
-        return aggregation;
-    }
+        return PipelineAggregatorBuilders.bucketSort("multi_buckets_sort", fieldSortList);
+   }
 
 }
