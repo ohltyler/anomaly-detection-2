@@ -35,9 +35,7 @@ import org.opensearch.common.io.stream.StreamInput;
 import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.xcontent.ToXContentObject;
 import org.opensearch.common.xcontent.XContentBuilder;
-
 public class SearchTopAnomalyResultResponse extends ActionResponse implements ToXContentObject {
-    public static final String BUCKETS = "buckets";
     private List<AnomalyResultBucket> anomalyResultBuckets;
 
     public SearchTopAnomalyResultResponse(StreamInput in) throws IOException {
@@ -56,6 +54,6 @@ public class SearchTopAnomalyResultResponse extends ActionResponse implements To
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        return builder.startObject().field(BUCKETS, anomalyResultBuckets).endObject();
+        return builder.startObject().field(AnomalyResultBucket.BUCKETS_FIELD, anomalyResultBuckets).endObject();
     }
 }

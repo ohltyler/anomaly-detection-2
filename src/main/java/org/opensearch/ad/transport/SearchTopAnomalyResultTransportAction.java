@@ -50,6 +50,7 @@ import org.opensearch.ad.common.exception.AnomalyDetectionException;
 import org.opensearch.ad.common.exception.ResourceNotFoundException;
 import org.opensearch.ad.model.ADTask;
 import org.opensearch.ad.model.AnomalyResult;
+import org.opensearch.ad.model.AnomalyResultBucket;
 import org.opensearch.ad.transport.handler.ADSearchHandler;
 import org.opensearch.common.inject.Inject;
 import org.opensearch.common.Strings;
@@ -86,6 +87,9 @@ import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_I
 public class SearchTopAnomalyResultTransportAction extends HandledTransportAction<SearchTopAnomalyResultRequest, SearchTopAnomalyResultResponse> {
     private ADSearchHandler searchHandler;
     private static final String index = ALL_AD_RESULTS_INDEX_PATTERN;
+    private static final String COUNT_FIELD = "_count";
+    private static final String BUCKET_SORT = "bucket_sort";
+    private static final String MULTI_BUCKETS = "multi_buckets";
     private static final Logger logger = LogManager.getLogger(SearchTopAnomalyResultTransportAction.class);
     private final Client client;
     private enum OrderType {
@@ -153,7 +157,7 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                 }
             }
 
-            // Make sure the order passed is valid
+            // Make sure the order passed is valid. Default to ordering by severity
             OrderType orderType;
             String orderString = request.getOrder();
             if (Strings.isNullOrEmpty(orderString)) {
@@ -210,7 +214,6 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
         SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder().query(query).aggregation(aggregation);
         searchRequest.source(searchSourceBuilder);
-
         return searchRequest;
     }
 
@@ -244,7 +247,8 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     }
 
     /**
-     * Generates the composite aggregation, creating a list of sources based on set of user-specified category fields
+     * Generates the composite aggregation.
+     * Creating a list of sources based on set of user-specified category fields, and sorting on the returned buckets
      *
      * @param request the request containing the all of the user-specified parameters needed to generate the request
      * @return the generated aggregation as an AggregationBuilder
@@ -256,13 +260,16 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             sources.add(new TermsValuesSourceBuilder(categoryField).script(script));
         }
 
-        // TODO: add the bucket aggregation here, based on the user-specified agg type (severity or occurrence)
-
-        // get the 2 subaggregations
-        AggregationBuilder bucketAggregation = getBucketAggregation(request.getOrder());
-        BucketSortPipelineAggregationBuilder bucketSort = getBucketSort();
-
-        return AggregationBuilders.composite("multi_buckets", sources).subAggregation(bucketAggregation).subAggregation(bucketSort);
+        // if getting severity, add the max anomaly grade bucket-level aggregation, and bucket sort by that
+        // if getting occurrence, sort by the existing _count field
+        if (request.getOrder().equals(OrderType.SEVERITY.getName())) {
+            AggregationBuilder maxAnomalyGradeAggregation = AggregationBuilders.max(AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD).field(AnomalyResult.ANOMALY_SCORE_FIELD);
+            BucketSortPipelineAggregationBuilder bucketSort = getBucketSortAggregation(OrderType.SEVERITY);
+            return AggregationBuilders.composite(MULTI_BUCKETS, sources).subAggregation(maxAnomalyGradeAggregation).subAggregation(bucketSort);
+        } else {
+            BucketSortPipelineAggregationBuilder bucketSort = getBucketSortAggregation(OrderType.OCCURRENCE);
+            return AggregationBuilders.composite(MULTI_BUCKETS, sources).subAggregation(bucketSort);
+        }
     }
 
     /**
@@ -295,6 +302,7 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     }
 
     /**
+     * Generates the painless script to fetch results that have an entity name matching the passed-in category field.
      *
      * @param categoryField the category field to be used as a source
      * @return the painless script used to get all docs with entity name values matching the category field
@@ -317,16 +325,17 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         return new Script(ScriptType.INLINE, "painless", builder.toString(), Collections.EMPTY_MAP, ImmutableMap.of("categoryField", categoryField));
     }
 
-    private AggregationBuilder getBucketAggregation(String order) {
-
-         // TODO: use order to determine the agg type here
-        return AggregationBuilders.max("max").field(AnomalyResult.ANOMALY_SCORE_FIELD);
-    }
-
-    private BucketSortPipelineAggregationBuilder getBucketSort() {
-        List fieldSortList = new ArrayList<>();
-        fieldSortList.add(new FieldSortBuilder("max").order(SortOrder.DESC));
-        return PipelineAggregatorBuilders.bucketSort("multi_buckets_sort", fieldSortList);
+    /**
+     * Generates the bucket sort aggregation
+     *
+     * @param orderType the field to be sorted on
+     * @return the bucket sort object containing the sorting logic
+     */
+    private BucketSortPipelineAggregationBuilder getBucketSortAggregation(OrderType orderType) {
+        List<FieldSortBuilder> fieldSortList = new ArrayList<>();
+        String sortField = orderType.equals((OrderType.SEVERITY)) ? AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD : COUNT_FIELD;
+        fieldSortList.add(new FieldSortBuilder(sortField).order(SortOrder.DESC));
+        return PipelineAggregatorBuilders.bucketSort(BUCKET_SORT, fieldSortList);
    }
 
 }

@@ -55,16 +55,16 @@ import com.google.common.base.Objects;
  */
 public class AnomalyResultBucket implements ToXContentObject, Writeable {
 
-    public static final String PARSE_FIELD_NAME = "buckets";
+    public static final String BUCKETS_FIELD = "buckets";
     public static final NamedXContentRegistry.Entry XCONTENT_REGISTRY = new NamedXContentRegistry.Entry(
             AnomalyResultBucket.class,
-            new ParseField(PARSE_FIELD_NAME),
+            new ParseField(BUCKETS_FIELD),
             it -> parse(it)
     );
 
     public static final String KEY_FIELD = "key";
     public static final String DOC_COUNT_FIELD = "doc_count";
-    private static final String MAX_ANOMALY_GRADE_FIELD = "max_anomaly_grade";
+    public static final String MAX_ANOMALY_GRADE_FIELD = "max_anomaly_grade";
 
     private final String key;
     private final int docCount;
