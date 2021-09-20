@@ -32,11 +32,16 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.apache.commons.lang.builder.ToStringBuilder;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.opensearch.ad.annotation.Generated;
 import org.opensearch.ad.constant.CommonName;
 import org.opensearch.ad.constant.CommonValue;
+import org.opensearch.ad.transport.SearchTopAnomalyResultTransportAction;
 import org.opensearch.ad.util.ParseUtils;
 import org.opensearch.common.ParseField;
 import org.opensearch.common.io.stream.StreamInput;
@@ -49,12 +54,15 @@ import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.commons.authuser.User;
 
 import com.google.common.base.Objects;
+import org.opensearch.search.aggregations.Aggregations;
+import org.opensearch.search.aggregations.metrics.InternalMax;
+import org.opensearch.search.aggregations.bucket.composite.CompositeAggregation.Bucket;
 
 /**
  * Represents a single bucket when retrieving top anomaly results for HC detectors
  */
 public class AnomalyResultBucket implements ToXContentObject, Writeable {
-
+    private static final Logger logger = LogManager.getLogger(AnomalyResultBucket.class);
     public static final String BUCKETS_FIELD = "buckets";
     public static final NamedXContentRegistry.Entry XCONTENT_REGISTRY = new NamedXContentRegistry.Entry(
             AnomalyResultBucket.class,
@@ -85,6 +93,10 @@ public class AnomalyResultBucket implements ToXContentObject, Writeable {
         this.key = input.readString();
         this.docCount = input.readInt();
         this.maxAnomalyGrade = input.readDouble();
+    }
+
+    public static AnomalyResultBucket createAnomalyResultBucket(Bucket bucket) {
+        return new AnomalyResultBucket(bucket.getKeyAsString(), (int) bucket.getDocCount(), ((InternalMax) bucket.getAggregations().get(MAX_ANOMALY_GRADE_FIELD)).getValue());
     }
 
     @Override
