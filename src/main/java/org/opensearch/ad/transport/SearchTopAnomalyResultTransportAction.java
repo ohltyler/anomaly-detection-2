@@ -26,7 +26,7 @@
 
 package org.opensearch.ad.transport;
 
-import java.io.IOException;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -41,8 +41,6 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.core.config.Order;
-import org.opensearch.OpenSearchStatusException;
 import org.opensearch.action.ActionListener;
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
@@ -53,12 +51,9 @@ import org.opensearch.ad.common.exception.ResourceNotFoundException;
 import org.opensearch.ad.model.ADTask;
 import org.opensearch.ad.model.AnomalyResult;
 import org.opensearch.ad.model.AnomalyResultBucket;
-import org.opensearch.ad.model.Entity;
 import org.opensearch.ad.transport.handler.ADSearchHandler;
 import org.opensearch.common.inject.Inject;
 import org.opensearch.common.Strings;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.index.query.BoolQueryBuilder;
 import org.opensearch.index.query.ExistsQueryBuilder;
 import org.opensearch.index.query.QueryBuilder;
@@ -71,33 +66,34 @@ import org.opensearch.search.aggregations.Aggregation;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.AggregationBuilders;
 import org.opensearch.search.aggregations.Aggregations;
-import org.opensearch.search.aggregations.BucketOrder;
 import org.opensearch.search.aggregations.PipelineAggregatorBuilders;
-import org.opensearch.search.aggregations.bucket.MultiBucketsAggregation;
 import org.opensearch.search.aggregations.bucket.composite.CompositeAggregation;
+import org.opensearch.search.aggregations.bucket.composite.CompositeAggregationBuilder;
 import org.opensearch.search.aggregations.bucket.composite.CompositeValuesSourceBuilder;
 import org.opensearch.search.aggregations.bucket.composite.TermsValuesSourceBuilder;
-import org.opensearch.search.aggregations.bucket.terms.Terms;
 import org.opensearch.search.aggregations.pipeline.BucketSortPipelineAggregationBuilder;
-import org.opensearch.search.aggregations.support.ValuesSource;
 import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.search.sort.FieldSortBuilder;
 import org.opensearch.search.sort.SortOrder;
 import org.opensearch.tasks.Task;
 import org.opensearch.transport.TransportService;
-import org.opensearch.ad.model.AnomalyResultBucket;
 import org.opensearch.client.Client;
 
 import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_INDEX_PATTERN;
 
 public class SearchTopAnomalyResultTransportAction extends HandledTransportAction<SearchTopAnomalyResultRequest, SearchTopAnomalyResultResponse> {
     private ADSearchHandler searchHandler;
+    // TODO: tune this to be a reasonable timeout
+    private static final long TIMEOUT_IN_MILLIS = 30000;
+    // Number of buckets to return per page
+    private static final int PAGE_SIZE = 100;
     private static final String index = ALL_AD_RESULTS_INDEX_PATTERN;
     private static final String COUNT_FIELD = "_count";
     private static final String BUCKET_SORT = "bucket_sort";
     private static final String MULTI_BUCKETS = "multi_buckets";
     private static final Logger logger = LogManager.getLogger(SearchTopAnomalyResultTransportAction.class);
     private final Client client;
+    private Clock clock;
     private enum OrderType {
         SEVERITY("severity"),
         OCCURRENCE("occurrence");
@@ -122,6 +118,7 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         super(SearchTopAnomalyResultAction.NAME, transportService, actionFilters, SearchTopAnomalyResultRequest::new);
         this.searchHandler = searchHandler;
         this.client = client;
+        this.clock = Clock.systemUTC();
     }
 
     @Override
@@ -190,7 +187,10 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             String prettyJson = gson.toJson(el);
             logger.info("\n\nsearch request:\n" + prettyJson);
 
-            searchHandler.search(searchRequest, new TopAnomalyResultListener(listener, 10000, request.getSize()));
+            searchHandler.search(searchRequest, new TopAnomalyResultListener(listener,
+                    searchRequest.source(),
+                    clock.millis() + TIMEOUT_IN_MILLIS,
+                    request.getSize()));
 
         }, exception -> {
             logger.error("Failed to get top anomaly results", exception);
@@ -199,14 +199,22 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
     }
 
+    /**
+     * ActionListener class to handle searched results in a paginated fashion
+     */
     class TopAnomalyResultListener implements ActionListener<SearchResponse> {
         private ActionListener<SearchTopAnomalyResultResponse> listener;
+        SearchSourceBuilder searchSourceBuilder;
         private long expirationEpochMs;
         private int maxResults;
         private List<AnomalyResultBucket> topResults;
 
-        TopAnomalyResultListener(ActionListener<SearchTopAnomalyResultResponse> listener, long expirationEpochMs, int maxResults) {
+        TopAnomalyResultListener(ActionListener<SearchTopAnomalyResultResponse> listener,
+                                 SearchSourceBuilder searchSourceBuilder,
+                                 long expirationEpochMs,
+                                 int maxResults) {
             this.listener = listener;
+            this.searchSourceBuilder = searchSourceBuilder;
             this.expirationEpochMs = expirationEpochMs;
             this.maxResults = maxResults;
             this.topResults = new ArrayList<>();
@@ -214,10 +222,6 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
         @Override
         public void onResponse(SearchResponse response) {
-            /**
-             * (from SearchFeatureDAO):
-             *
-             */
             try {
                 Aggregations aggs = response.getAggregations();
                 if (aggs == null) {
@@ -243,32 +247,33 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                         .map(bucket -> AnomalyResultBucket.createAnomalyResultBucket(bucket))
                         .collect(Collectors.toList());
 
-                listener.onResponse(new SearchTopAnomalyResultResponse(bucketResults));
+                // we only need at most maxResults
+                int amountToWrite = maxResults - topResults.size();
+                for (int i = 0; i < amountToWrite && i < bucketResults.size(); i++) {
+                    topResults.add(bucketResults.get(i));
+                }
+                Map<String, Object> afterKey = compositeAgg.afterKey();
+                if (topResults.size() >= maxResults || afterKey == null) {
+                    listener.onResponse(new SearchTopAnomalyResultResponse(topResults));
+                } else if (expirationEpochMs < clock.millis()) {
+                    if (topResults.isEmpty()) {
+                        listener.onFailure(new AnomalyDetectionException("Timed out getting all top anomaly results. Please retry later."));
+                    } else {
+                        logger.info("Timed out getting all top anomaly results. Sending back partial results.");
+                        listener.onResponse(new SearchTopAnomalyResultResponse(topResults));
+                    }
+                } else {
+                    CompositeAggregationBuilder aggBuilder = (CompositeAggregationBuilder) searchSourceBuilder.aggregations().
+                            getAggregatorFactories().iterator().next();
+                    aggBuilder.aggregateAfter(afterKey);
 
-                // TODO: actually iterate through and make sequential calls. Need to figure out how to use updateSourceAfterKey too
-//                // we only need at most maxEntitiesForPreview
-//                int amountToWrite = maxEntitiesSize - topEntities.size();
-//                for (int i = 0; i < amountToWrite && i < pageResults.size(); i++) {
-//                    topEntities.add(pageResults.get(i));
-//                }
-//                Map<String, Object> afterKey = compositeAgg.afterKey();
-//                if (topEntities.size() >= maxEntitiesSize || afterKey == null) {
-//                    listener.onResponse(topEntities);
-//                } else if (expirationEpochMs < clock.millis()) {
-//                    if (topEntities.isEmpty()) {
-//                        listener.onFailure(new AnomalyDetectionException("timeout to get preview results.  Please retry later."));
-//                    } else {
-//                        logger.info("timeout to get preview results. Send whatever we have.");
-//                        listener.onResponse(topEntities);
-//                    }
-//                } else {
-//                    updateSourceAfterKey(afterKey, searchSourceBuilder);
-//                    client
-//                            .search(
-//                                    new SearchRequest().indices(detector.getIndices().toArray(new String[0])).source(searchSourceBuilder),
-//                                    this
-//                            );
-//                }
+                    // Searching more, using an updated source with an after_key
+                    searchHandler
+                            .search(
+                                    new SearchRequest().indices(index).source(searchSourceBuilder),
+                                    this
+                            );
+                }
 
             } catch (Exception e) {
                 onFailure(e);
@@ -346,14 +351,17 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         }
 
         // Generate the max anomaly grade aggregation
-        AggregationBuilder maxAnomalyGradeAggregation = AggregationBuilders.max(AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD).field(AnomalyResult.ANOMALY_SCORE_FIELD);
+        AggregationBuilder maxAnomalyGradeAggregation = AggregationBuilders
+                .max(AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD)
+                .field(AnomalyResult.ANOMALY_SCORE_FIELD);
 
         // Generate the bucket sort aggregation (depends on order type)
         OrderType orderType = request.getOrder().equals(OrderType.SEVERITY.getName()) ? OrderType.SEVERITY : OrderType.OCCURRENCE;
         String sortField = orderType.equals((OrderType.SEVERITY)) ? AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD : COUNT_FIELD;
-        BucketSortPipelineAggregationBuilder bucketSort = PipelineAggregatorBuilders.bucketSort(BUCKET_SORT, new ArrayList<>(Arrays.asList(new FieldSortBuilder(sortField).order(SortOrder.DESC))));
+        BucketSortPipelineAggregationBuilder bucketSort = PipelineAggregatorBuilders
+                .bucketSort(BUCKET_SORT, new ArrayList<>(Arrays.asList(new FieldSortBuilder(sortField).order(SortOrder.DESC))));
 
-        return AggregationBuilders.composite(MULTI_BUCKETS, sources).subAggregation(maxAnomalyGradeAggregation).subAggregation(bucketSort);
+        return AggregationBuilders.composite(MULTI_BUCKETS, sources).size(PAGE_SIZE).subAggregation(maxAnomalyGradeAggregation).subAggregation(bucketSort);
     }
 
     /**
