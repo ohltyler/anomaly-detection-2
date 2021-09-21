@@ -62,7 +62,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
     private String detectorId;
     private String taskId;
     private boolean historical;
-    private int size;
+    private Integer size;
     private List<String> categoryFields;
     private String order;
     private Instant startTime;
@@ -79,7 +79,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
         endTime = in.readInstant();
     }
 
-    public SearchTopAnomalyResultRequest(String detectorId, String taskId, boolean historical, int size, List<String> categoryFields, String order, Instant startTime, Instant endTime)
+    public SearchTopAnomalyResultRequest(String detectorId, String taskId, boolean historical, Integer size, List<String> categoryFields, String order, Instant startTime, Instant endTime)
             throws IOException {
         super();
         this.detectorId = detectorId;
@@ -102,7 +102,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
     public boolean getHistorical() { return historical; }
 
-    public int getSize() { return size; }
+    public Integer getSize() { return size; }
 
     public List<String> getCategoryFields() { return categoryFields; }
 
@@ -118,11 +118,16 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
     public void setTaskId (String taskId) { this.taskId = taskId; }
 
-    public void setOrder (String order) { this.order = order; }
+    public void setSize (Integer size) {
+        this.size = size;
+    }
 
     public void setCategoryFields (List<String> categoryFields) {
         this.categoryFields = categoryFields;
     }
+
+    public void setOrder (String order) { this.order = order; }
+
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {

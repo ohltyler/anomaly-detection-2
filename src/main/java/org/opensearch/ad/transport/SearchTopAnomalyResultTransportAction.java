@@ -29,9 +29,11 @@ package org.opensearch.ad.transport;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Arrays;
+import java.util.PriorityQueue;
 import java.util.stream.Collectors;
 
 import com.google.common.collect.ImmutableMap;
@@ -81,12 +83,105 @@ import org.opensearch.client.Client;
 
 import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_INDEX_PATTERN;
 
+/**
+ * Transport action to fetch top anomaly results for some HC detector. Generates a query based on user input to fetch
+ * aggregated entity results.
+ *
+ * Example of a generated query aggregating over the "Carrier" category field, and sorting on max anomaly grade, using
+ * a historical task ID:
+ *
+ * {
+ *   "query": {
+ *     "bool": {
+ *       "filter": [
+ *         {
+ *           "range": {
+ *             "execution_end_time": {
+ *               "from": "2021-09-10T07:00:00.000Z",
+ *               "to": "2021-09-30T07:00:00.000Z",
+ *               "include_lower": true,
+ *               "include_upper": true,
+ *               "boost": 1.0
+ *             }
+ *           }
+ *         },
+ *         {
+ *           "range": {
+ *             "anomaly_score": {
+ *               "from": 0,
+ *               "include_lower": true,
+ *               "include_upper": true,
+ *               "boost": 1.0
+ *             }
+ *           }
+ *         },
+ *         {
+ *           "term": {
+ *             "task_id": {
+ *               "value": "2AwACXwBM-RcgLq7Za87",
+ *               "boost": 1.0
+ *             }
+ *           }
+ *         }
+ *       ],
+ *       "adjust_pure_negative": true,
+ *       "boost": 1.0
+ *     }
+ *   },
+ *   "aggregations": {
+ *     "multi_buckets": {
+ *       "composite": {
+ *         "size": 100,
+ *         "sources": [
+ *           {
+ *             "Carrier": {
+ *               "terms": {
+ *                 "script": {
+ *                   "source": "String value = null;if (params == null || params._source == null || params._source.entity == null) {return \"\"}for (item in params._source.entity) {if (item[\"name\"] == params[\"categoryField\"]) {value = item['value'];break;}}return value;",
+ *                   "lang": "painless",
+ *                   "params": {
+ *                     "categoryField": "Carrier"
+ *                   }
+ *                 },
+ *                 "missing_bucket": false,
+ *                 "order": "asc"
+ *               }
+ *             }
+ *           }
+ *         ]
+ *       },
+ *       "aggregations": {
+ *         "max_anomaly_grade": {
+ *           "max": {
+ *             "field": "anomaly_score"
+ *           }
+ *         },
+ *         "bucket_sort": {
+ *           "bucket_sort": {
+ *             "sort": [
+ *               {
+ *                 "max_anomaly_grade": {
+ *                   "order": "desc"
+ *                 }
+ *               }
+ *             ],
+ *             "from": 0,
+ *             "gap_policy": "SKIP"
+ *           }
+ *         }
+ *       }
+ *     }
+ *   }
+ * }
+ */
 public class SearchTopAnomalyResultTransportAction extends HandledTransportAction<SearchTopAnomalyResultRequest, SearchTopAnomalyResultResponse> {
     private ADSearchHandler searchHandler;
     // TODO: tune this to be a reasonable timeout
     private static final long TIMEOUT_IN_MILLIS = 30000;
     // Number of buckets to return per page
     private static final int PAGE_SIZE = 100;
+    private static final OrderType DEFAULT_ORDER_TYPE = OrderType.SEVERITY;
+    private static final int DEFAULT_SIZE = 10;
     private static final String index = ALL_AD_RESULTS_INDEX_PATTERN;
     private static final String COUNT_FIELD = "_count";
     private static final String BUCKET_SORT = "bucket_sort";
@@ -148,8 +243,8 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             }
 
 
-            // If we want to retrieve historical results and no task ID was originally passed: make a transport action call
-            // to get the latest historical task ID
+            // If we want to retrieve historical results and no task ID was originally passed: use the latest
+            // task ID stored in the detector's historical task
             if (request.getHistorical() == true && Strings.isNullOrEmpty(request.getTaskId())) {
                 ADTask historicalTask = getAdResponse.getHistoricalAdTask();
                 if (historicalTask == null) {
@@ -160,11 +255,11 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                 }
             }
 
-            // Make sure the order passed is valid. Default to ordering by severity
+            // Make sure the order passed is valid. If nothing passed use default
             OrderType orderType;
             String orderString = request.getOrder();
             if (Strings.isNullOrEmpty(orderString)) {
-                orderType = OrderType.SEVERITY;
+                orderType = DEFAULT_ORDER_TYPE;
             } else {
                 if (orderString.equals(OrderType.SEVERITY.getName())) {
                     orderType = OrderType.SEVERITY;
@@ -176,6 +271,13 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                 }
             }
             request.setOrder(orderType.getName());
+
+            // Make sure the size passed is valid. If nothing passed use default
+            if (request.getSize() == null) {
+                request.setSize(DEFAULT_SIZE);
+            } else if (request.getSize() <= 0) {
+                throw new IllegalArgumentException("Size field must be a positive integer");
+            }
 
             // Generating the search request which will contain the generated query
             SearchRequest searchRequest = generateSearchRequest(request);
@@ -190,7 +292,8 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             searchHandler.search(searchRequest, new TopAnomalyResultListener(listener,
                     searchRequest.source(),
                     clock.millis() + TIMEOUT_IN_MILLIS,
-                    request.getSize()));
+                    request.getSize(),
+                    orderType));
 
         }, exception -> {
             logger.error("Failed to get top anomaly results", exception);
@@ -200,24 +303,44 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     }
 
     /**
-     * ActionListener class to handle searched results in a paginated fashion
+     * ActionListener class to handle bucketed search results in a paginated fashion.
+     * Note that the bucket_sort aggregation is a pipeline aggregation, and is executed
+     * after all non-pipeline aggregations (including the composite bucket aggregation).
+     * Because of this, the sorting is only done locally based on the buckets in the current page,
+     * and does not recognize buckets from other pages. To get around this issue, we use a max
+     * heap and add all results to the heap until there are no more buckets. This guarantees
+     * that the final set of buckets in the heap is the globally sorted set of buckets.
      */
     class TopAnomalyResultListener implements ActionListener<SearchResponse> {
         private ActionListener<SearchTopAnomalyResultResponse> listener;
         SearchSourceBuilder searchSourceBuilder;
         private long expirationEpochMs;
         private int maxResults;
-        private List<AnomalyResultBucket> topResults;
+        private OrderType orderType;
+        private PriorityQueue<AnomalyResultBucket> maxHeap;
 
         TopAnomalyResultListener(ActionListener<SearchTopAnomalyResultResponse> listener,
                                  SearchSourceBuilder searchSourceBuilder,
                                  long expirationEpochMs,
-                                 int maxResults) {
+                                 int maxResults,
+                                 OrderType orderType) {
             this.listener = listener;
             this.searchSourceBuilder = searchSourceBuilder;
             this.expirationEpochMs = expirationEpochMs;
             this.maxResults = maxResults;
-            this.topResults = new ArrayList<>();
+            this.orderType = orderType;
+            this.maxHeap = new PriorityQueue<>(maxResults, new Comparator<AnomalyResultBucket>() {
+                // Sorting by descending order of anomaly grade or doc count
+                @Override
+                public int compare(AnomalyResultBucket bucket1, AnomalyResultBucket bucket2) {
+                    if (orderType == OrderType.SEVERITY) {
+                        double difference = bucket1.getMaxAnomalyGrade() - bucket2.getMaxAnomalyGrade();
+                        return difference > 0 ? 1 : difference == 0 ? 0 : -1;
+                    } else {
+                        return bucket1.getDocCount() - bucket2.getDocCount();
+                    }
+                }
+            });
         }
 
         @Override
@@ -229,7 +352,7 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                     // the large amounts of changes there). For example, they may change to if there are results return it; otherwise return
                     // null instead of an empty Aggregations as they currently do.
                     logger.warn("Unexpected null aggregation.");
-                    listener.onResponse(new SearchTopAnomalyResultResponse(topResults));
+                    listener.onResponse(new SearchTopAnomalyResultResponse(new ArrayList<>()));
                     return;
                 }
 
@@ -247,20 +370,23 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                         .map(bucket -> AnomalyResultBucket.createAnomalyResultBucket(bucket))
                         .collect(Collectors.toList());
 
-                // we only need at most maxResults
-                int amountToWrite = maxResults - topResults.size();
-                for (int i = 0; i < amountToWrite && i < bucketResults.size(); i++) {
-                    topResults.add(bucketResults.get(i));
+                // Add all of the results to the heap, and only keep the top maxResults buckets
+                maxHeap.addAll(bucketResults);
+                while (maxHeap.size() > maxResults) {
+                    maxHeap.poll();
                 }
+
                 Map<String, Object> afterKey = compositeAgg.afterKey();
-                if (topResults.size() >= maxResults || afterKey == null) {
-                    listener.onResponse(new SearchTopAnomalyResultResponse(topResults));
+
+                // If afterKey is null: we've hit the end of results. Return the results
+                if (afterKey == null) {
+                    listener.onResponse(new SearchTopAnomalyResultResponse(getOrderedListFromMaxHeap(maxHeap, orderType)));
                 } else if (expirationEpochMs < clock.millis()) {
-                    if (topResults.isEmpty()) {
+                    if (maxHeap.isEmpty()) {
                         listener.onFailure(new AnomalyDetectionException("Timed out getting all top anomaly results. Please retry later."));
                     } else {
                         logger.info("Timed out getting all top anomaly results. Sending back partial results.");
-                        listener.onResponse(new SearchTopAnomalyResultResponse(topResults));
+                        listener.onResponse(new SearchTopAnomalyResultResponse(getOrderedListFromMaxHeap(maxHeap, orderType)));
                     }
                 } else {
                     CompositeAggregationBuilder aggBuilder = (CompositeAggregationBuilder) searchSourceBuilder.aggregations().
@@ -386,6 +512,29 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
         // The last argument contains the K/V pair to inject the categoryField value into the script
         return new Script(ScriptType.INLINE, "painless", builder.toString(), Collections.EMPTY_MAP, ImmutableMap.of("categoryField", categoryField));
+    }
+
+    /**
+     * Creates an ordered List from the max heap, based on the order type.
+     *
+     * @param maxHeap the max heap
+     * @param orderType the order type to determine how to sort the result buckets
+     * @return an ordered List containing all of the elements in the max heap
+     */
+    private List<AnomalyResultBucket> getOrderedListFromMaxHeap(PriorityQueue<AnomalyResultBucket> maxHeap, OrderType orderType) {
+        List<AnomalyResultBucket> maxHeapAsList = new ArrayList<>(maxHeap);
+        Collections.sort(maxHeapAsList, new Comparator<AnomalyResultBucket>() {
+            @Override
+            public int compare(AnomalyResultBucket bucket1, AnomalyResultBucket bucket2) {
+                if (orderType == OrderType.SEVERITY) {
+                    double difference = bucket2.getMaxAnomalyGrade() - bucket1.getMaxAnomalyGrade();
+                    return difference > 0 ? 1 : difference == 0 ? 0 : -1;
+                } else {
+                    return bucket2.getDocCount() - bucket1.getDocCount();
+                }
+            }
+        });
+        return maxHeapAsList;
     }
 
 }
