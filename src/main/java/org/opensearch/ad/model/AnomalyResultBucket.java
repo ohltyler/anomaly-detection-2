@@ -26,35 +26,14 @@
 
 package org.opensearch.ad.model;
 
-import static org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
-
 import java.io.IOException;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
-import org.apache.commons.lang.builder.ToStringBuilder;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.opensearch.ad.annotation.Generated;
-import org.opensearch.ad.constant.CommonName;
-import org.opensearch.ad.constant.CommonValue;
-import org.opensearch.ad.transport.SearchTopAnomalyResultTransportAction;
-import org.opensearch.ad.util.ParseUtils;
-import org.opensearch.common.ParseField;
 import org.opensearch.common.io.stream.StreamInput;
 import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
 import org.opensearch.common.xcontent.ToXContentObject;
 import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.commons.authuser.User;
-
-import com.google.common.base.Objects;
-import org.opensearch.search.aggregations.Aggregations;
 import org.opensearch.search.aggregations.metrics.InternalMax;
 import org.opensearch.search.aggregations.bucket.composite.CompositeAggregation.Bucket;
 
@@ -62,24 +41,17 @@ import org.opensearch.search.aggregations.bucket.composite.CompositeAggregation.
  * Represents a single bucket when retrieving top anomaly results for HC detectors
  */
 public class AnomalyResultBucket implements ToXContentObject, Writeable {
-    private static final Logger logger = LogManager.getLogger(AnomalyResultBucket.class);
     public static final String BUCKETS_FIELD = "buckets";
-    public static final NamedXContentRegistry.Entry XCONTENT_REGISTRY = new NamedXContentRegistry.Entry(
-            AnomalyResultBucket.class,
-            new ParseField(BUCKETS_FIELD),
-            it -> parse(it)
-    );
-
     public static final String KEY_FIELD = "key";
     public static final String DOC_COUNT_FIELD = "doc_count";
     public static final String MAX_ANOMALY_GRADE_FIELD = "max_anomaly_grade";
 
-    private final String key;
+    private final Map<String, Object> key;
     private final int docCount;
     private final double maxAnomalyGrade;
 
     public AnomalyResultBucket(
-            String key,
+            Map<String, Object> key,
             int docCount,
             double maxAnomalyGrade
     ) {
@@ -90,13 +62,13 @@ public class AnomalyResultBucket implements ToXContentObject, Writeable {
 
 
     public AnomalyResultBucket(StreamInput input) throws IOException {
-        this.key = input.readString();
+        this.key = input.readMap();
         this.docCount = input.readInt();
         this.maxAnomalyGrade = input.readDouble();
     }
 
     public static AnomalyResultBucket createAnomalyResultBucket(Bucket bucket) {
-        return new AnomalyResultBucket(bucket.getKeyAsString(), (int) bucket.getDocCount(), ((InternalMax) bucket.getAggregations().get(MAX_ANOMALY_GRADE_FIELD)).getValue());
+        return new AnomalyResultBucket(bucket.getKey(), (int) bucket.getDocCount(), ((InternalMax) bucket.getAggregations().get(MAX_ANOMALY_GRADE_FIELD)).getValue());
     }
 
     @Override
@@ -109,82 +81,16 @@ public class AnomalyResultBucket implements ToXContentObject, Writeable {
         return xContentBuilder.endObject();
     }
 
-    public static AnomalyResultBucket parse(XContentParser parser) throws IOException {
-        String key = null;
-        Integer docCount = null;
-        Double maxAnomalyGrade = null;
-
-        ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
-        while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
-            String fieldName = parser.currentName();
-            parser.nextToken();
-
-            switch (fieldName) {
-                case KEY_FIELD:
-                    key = parser.text();
-                    break;
-                case DOC_COUNT_FIELD:
-                    docCount = parser.intValue();
-                    break;
-                case MAX_ANOMALY_GRADE_FIELD:
-                    maxAnomalyGrade = parser.doubleValue();
-                    break;
-                default:
-                    parser.skipChildren();
-                    break;
-            }
-        }
-        return new AnomalyResultBucket(
-                key,
-                docCount,
-                maxAnomalyGrade
-        );
-    }
-
-    @Generated
     @Override
-    public boolean equals(Object o) {
-        if (this == o)
-            return true;
-        if (o == null || getClass() != o.getClass())
-            return false;
-        AnomalyResultBucket that = (AnomalyResultBucket) o;
-        return Objects.equal(getKey(), that.getKey())
-                && Objects.equal(getDocCount(), that.getDocCount())
-                && Objects.equal(getMaxAnomalyGrade(), that.getMaxAnomalyGrade());
+    public void writeTo(StreamOutput out) throws IOException {
+        out.writeMap(key);
+        out.writeInt(docCount);
+        out.writeDouble(maxAnomalyGrade);
     }
 
-    @Generated
-    @Override
-    public int hashCode() {
-        return Objects
-                .hashCode(
-                        getKey(),
-                        getDocCount(),
-                        getMaxAnomalyGrade()
-                );
-    }
-
-    @Generated
-    @Override
-    public String toString() {
-        return new ToStringBuilder(this)
-                .append("key", key)
-                .append("docCount", docCount)
-                .append("maxAnomalyGrade", maxAnomalyGrade)
-                .toString();
-    }
-
-    public String getKey() { return key; }
+    public Map<String, Object> getKey() { return key; }
 
     public int getDocCount() { return docCount; }
 
     public double getMaxAnomalyGrade() { return maxAnomalyGrade; }
-
-    @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        out.writeString(key);
-        out.writeInt(docCount);
-        out.writeDouble(maxAnomalyGrade);
-    }
 }

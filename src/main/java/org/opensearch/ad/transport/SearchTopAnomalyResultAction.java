@@ -27,7 +27,6 @@
 package org.opensearch.ad.transport;
 
 import org.opensearch.action.ActionType;
-import org.opensearch.ad.transport.SearchTopAnomalyResultResponse;
 import org.opensearch.ad.constant.CommonValue;
 
 public class SearchTopAnomalyResultAction extends ActionType<SearchTopAnomalyResultResponse> {

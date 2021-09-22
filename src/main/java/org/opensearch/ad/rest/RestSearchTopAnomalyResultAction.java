@@ -34,10 +34,6 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
 
-import org.apache.commons.lang.StringUtils;
-import org.apache.logging.log4j.Level;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.opensearch.ad.AnomalyDetectorPlugin;
 import org.opensearch.ad.transport.SearchTopAnomalyResultAction;
 import org.opensearch.ad.constant.CommonErrorMessages;
@@ -45,11 +41,9 @@ import org.opensearch.ad.settings.EnabledSetting;
 import org.opensearch.ad.transport.SearchTopAnomalyResultRequest;
 import org.opensearch.ad.transport.SearchTopAnomalyResultResponse;
 import org.opensearch.client.node.NodeClient;
-import org.opensearch.common.Strings;
 import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.rest.BaseRestHandler;
 import org.opensearch.rest.BytesRestResponse;
-import org.opensearch.rest.RestChannel;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.rest.RestResponse;
 import org.opensearch.rest.RestStatus;
@@ -67,7 +61,6 @@ public class RestSearchTopAnomalyResultAction extends BaseRestHandler {
     //private static final String LEGACY_URL_PATH = AnomalyDetectorPlugin.LEGACY_OPENDISTRO_AD_BASE_URI + "/results/_topAnomalies";
     private static final String URL_PATH = String.format(Locale.ROOT, "%s/{%s}/%s/%s", AnomalyDetectorPlugin.AD_BASE_DETECTORS_URI, DETECTOR_ID, RESULTS, TOP_ANOMALIES);
     private final String SEARCH_TOP_ANOMALY_DETECTOR_ACTION = "search_top_anomaly_result";
-    private static final Logger logger = LogManager.getLogger(RestSearchTopAnomalyResultAction.class);
 
     public RestSearchTopAnomalyResultAction() {}
 

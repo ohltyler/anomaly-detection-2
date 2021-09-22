@@ -36,6 +36,9 @@ import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.xcontent.ToXContentObject;
 import org.opensearch.common.xcontent.XContentBuilder;
 
+/**
+ * Response for getting the top anomaly results for HC detectors
+ */
 public class SearchTopAnomalyResultResponse extends ActionResponse implements ToXContentObject {
     private List<AnomalyResultBucket> anomalyResultBuckets;
 

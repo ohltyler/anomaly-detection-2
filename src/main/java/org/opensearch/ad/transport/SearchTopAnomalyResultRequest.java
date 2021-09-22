@@ -32,14 +32,8 @@ import java.util.List;
 
 import org.opensearch.action.ActionRequest;
 import org.opensearch.action.ActionRequestValidationException;
-import org.opensearch.ad.model.AnomalyDetector;
-import org.opensearch.ad.model.AnomalyDetectorExecutionInput;
 import org.opensearch.ad.util.ParseUtils;
-import org.opensearch.common.Strings;
 import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentParser;
 
 import static org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
@@ -49,11 +43,9 @@ import static org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedT
  *
  * size, category field, and order are optional, and will be set to default values if left blank
  */
-public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXContentObject {
+public class SearchTopAnomalyResultRequest extends ActionRequest {
 
-    private static final String DETECTOR_ID_FIELD = "detector_id";
     private static final String TASK_ID_FIELD = "task_id";
-    private static final String HISTORICAL_FIELD = "historical";
     private static final String SIZE_FIELD = "size";
     private static final String CATEGORY_FIELD_FIELD = "category_field";
     private static final String ORDER_FIELD = "order";
@@ -79,8 +71,17 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
         endTime = in.readInstant();
     }
 
-    public SearchTopAnomalyResultRequest(String detectorId, String taskId, boolean historical, Integer size, List<String> categoryFields, String order, Instant startTime, Instant endTime)
-            throws IOException {
+    public SearchTopAnomalyResultRequest(
+            String detectorId,
+            String taskId,
+            boolean historical,
+            Integer size,
+            List<String> categoryFields,
+            String order,
+            Instant startTime,
+            Instant endTime
+    )
+    {
         super();
         this.detectorId = detectorId;
         this.taskId = taskId;
@@ -128,22 +129,6 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
     public void setOrder (String order) { this.order = order; }
 
-
-    @Override
-    public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        XContentBuilder xContentBuilder = builder
-                .startObject()
-                .field(DETECTOR_ID_FIELD, detectorId)
-                .field(TASK_ID_FIELD, taskId)
-                .field(HISTORICAL_FIELD, historical)
-                .field(SIZE_FIELD, size)
-                .field(CATEGORY_FIELD_FIELD, categoryFields)
-                .field(ORDER_FIELD, order)
-                .field(START_TIME_FIELD, startTime.toEpochMilli())
-                .field(END_TIME_FIELD, endTime.toEpochMilli());
-        return xContentBuilder.endObject();
-    }
-
     @SuppressWarnings("unchecked")
     public static SearchTopAnomalyResultRequest parse(XContentParser parser, String detectorId, boolean historical) throws IOException {
         String taskId = null;
@@ -186,20 +171,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest implements ToXC
 
         // Cast category field Object list to String list
         List<String> convertedCategoryFields = (List<String>)(List<?>)(categoryFields);
-
         return new SearchTopAnomalyResultRequest(detectorId, taskId, historical, size, convertedCategoryFields, order, startTime, endTime);
-    }
-
-    @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        super.writeTo(out);
-        out.writeOptionalString(detectorId);
-        out.writeOptionalString(taskId);
-        out.writeOptionalBoolean(historical);
-        out.writeOptionalInt(size);
-        out.writeOptionalStringCollection(categoryFields);
-        out.writeInstant(startTime);
-        out.writeInstant(endTime);
     }
 
     @Override
