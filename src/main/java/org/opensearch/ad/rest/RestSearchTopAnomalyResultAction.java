@@ -59,7 +59,7 @@ import com.google.common.collect.ImmutableList;
 
 
 /**
- * This class consists of the REST handler to search top anomaly results for HC detectors.
+ * The REST handler to search top entity anomaly results for HC detectors.
  */
 public class RestSearchTopAnomalyResultAction extends BaseRestHandler {
 
@@ -87,19 +87,17 @@ public class RestSearchTopAnomalyResultAction extends BaseRestHandler {
         // Get the typed request
         SearchTopAnomalyResultRequest searchTopAnomalyResultRequest = getSearchTopAnomalyResultRequest(request);
 
-        // Return the lambda expression (a RestChannelConsumer)
-        return channel -> {
+        return channel ->
+            client.execute(
+                    SearchTopAnomalyResultAction.INSTANCE,
+                    searchTopAnomalyResultRequest,
+                    new RestResponseListener<SearchTopAnomalyResultResponse>(channel) {
+                        @Override
+                        public RestResponse buildResponse(SearchTopAnomalyResultResponse response) throws Exception {
+                            return new BytesRestResponse(RestStatus.OK, response.toXContent(channel.newBuilder(), EMPTY_PARAMS));
+                        }
+                    });
 
-            // Validate the request, return errors if found
-            String error = validateSearchTopAnomalyResultRequest(searchTopAnomalyResultRequest);
-            if (StringUtils.isNotBlank(error)) {
-                channel.sendResponse(new BytesRestResponse(RestStatus.BAD_REQUEST, error));
-                return;
-            }
-
-            // Execute the correct transport action with the passed-in client, and the rest response listener defined below
-            client.execute(SearchTopAnomalyResultAction.INSTANCE, searchTopAnomalyResultRequest, search(channel));
-        };
     }
 
     private SearchTopAnomalyResultRequest getSearchTopAnomalyResultRequest(RestRequest request) throws IOException {
@@ -112,34 +110,7 @@ public class RestSearchTopAnomalyResultAction extends BaseRestHandler {
         boolean historical = request.paramAsBoolean("historical", false);
         XContentParser parser = request.contentParser();
         ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
-        SearchTopAnomalyResultRequest req = SearchTopAnomalyResultRequest.parse(parser, detectorId, historical);
-        return req;
-    }
-
-
-    // Rest response listener to handle the response
-    private RestResponseListener<SearchTopAnomalyResultResponse> search(RestChannel channel) {
-        return new RestResponseListener<SearchTopAnomalyResultResponse>(channel) {
-            @Override
-            public RestResponse buildResponse(SearchTopAnomalyResultResponse response) throws Exception {
-                return new BytesRestResponse(RestStatus.OK, response.toXContent(channel.newBuilder(), EMPTY_PARAMS));
-            }
-        };
-    }
-
-    private String validateSearchTopAnomalyResultRequest(SearchTopAnomalyResultRequest request) {
-        if (request.getStartTime() == null || request.getEndTime() == null) {
-            return "Must set both start time and end time with epoch of milliseconds";
-        }
-        if (!request.getStartTime().isBefore(request.getEndTime())) {
-            return "Start time should be before end time";
-        }
-        if (Strings.isEmpty(request.getDetectorId())) {
-            return "Must have a detector ID set";
-        }
-
-        // TODO: add more validation on remaining fields
-        return null;
+        return SearchTopAnomalyResultRequest.parse(parser, detectorId, historical);
     }
 
     @Override

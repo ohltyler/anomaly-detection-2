@@ -35,6 +35,7 @@ import org.opensearch.common.io.stream.StreamInput;
 import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.xcontent.ToXContentObject;
 import org.opensearch.common.xcontent.XContentBuilder;
+
 public class SearchTopAnomalyResultResponse extends ActionResponse implements ToXContentObject {
     private List<AnomalyResultBucket> anomalyResultBuckets;
 

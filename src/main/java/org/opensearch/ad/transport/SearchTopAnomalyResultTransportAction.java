@@ -182,13 +182,16 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     private static final int PAGE_SIZE = 100;
     private static final OrderType DEFAULT_ORDER_TYPE = OrderType.SEVERITY;
     private static final int DEFAULT_SIZE = 10;
+    // TODO: tune this to be a reasonable max size
+    private static final int MAX_SIZE = 1000;
     private static final String index = ALL_AD_RESULTS_INDEX_PATTERN;
     private static final String COUNT_FIELD = "_count";
-    private static final String BUCKET_SORT = "bucket_sort";
-    private static final String MULTI_BUCKETS = "multi_buckets";
+    private static final String BUCKET_SORT_FIELD = "bucket_sort";
+    private static final String MULTI_BUCKETS_FIELD = "multi_buckets";
     private static final Logger logger = LogManager.getLogger(SearchTopAnomalyResultTransportAction.class);
     private final Client client;
     private Clock clock;
+
     private enum OrderType {
         SEVERITY("severity"),
         OCCURRENCE("occurrence");
@@ -219,43 +222,56 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     @Override
     protected void doExecute(Task task, SearchTopAnomalyResultRequest request, ActionListener<SearchTopAnomalyResultResponse> listener) {
 
-        GetAnomalyDetectorRequest getAdRequest = new GetAnomalyDetectorRequest(request.getDetectorId(), -3L, false, true, "", "", false, null);
+        GetAnomalyDetectorRequest getAdRequest = new GetAnomalyDetectorRequest(
+                request.getDetectorId(),
+                -3L,
+                false,
+                true,
+                "",
+                "",
+                false,
+                null
+        );
         client.execute(GetAnomalyDetectorAction.INSTANCE, getAdRequest, ActionListener.wrap(getAdResponse -> {
+            // Validating the start and end time
+            if (request.getStartTime() == null || request.getEndTime() == null) {
+                throw new IllegalArgumentException("Must set both start time and end time with epoch of milliseconds");
+            }
+            if (!request.getStartTime().isBefore(request.getEndTime())) {
+                throw new IllegalArgumentException("Start time should be before end time");
+            }
 
             // Make sure detector is HC
             List<String> categoryFieldsFromResponse = getAdResponse.getAnomalyDetector().getCategoryField();
             if (categoryFieldsFromResponse == null || categoryFieldsFromResponse.isEmpty()) {
-                throw new IllegalArgumentException(String.format("No category fields found for detector %s", request.getDetectorId()));
+                throw new IllegalArgumentException(String.format("No category fields found for detector ID %s", request.getDetectorId()));
             }
 
-            // Get the list of category fields if the user didn't specify any
+            // Validating the category fields. Setting the list to be all category fields,
+            // unless otherwise specified
             if (request.getCategoryFields() == null || request.getCategoryFields().isEmpty()) {
                 request.setCategoryFields(categoryFieldsFromResponse);
             } else {
-                if (request.getCategoryFields().size() > categoryFieldsFromResponse.size()) {
-                    throw new IllegalArgumentException("Too many category fields specified. Please select a subset");
-                }
                 for (String categoryField : request.getCategoryFields()) {
                     if (!categoryFieldsFromResponse.contains(categoryField)) {
-                        throw new IllegalArgumentException(String.format("Category field %s doesn't exist for detector %s", categoryField, request.getDetectorId()));
+                        throw new IllegalArgumentException(String.format("Category field %s doesn't exist for detector ID %s", categoryField, request.getDetectorId()));
                     }
                 }
             }
 
-
-            // If we want to retrieve historical results and no task ID was originally passed: use the latest
-            // task ID stored in the detector's historical task
-            if (request.getHistorical() == true && Strings.isNullOrEmpty(request.getTaskId())) {
+            // Validating historical tasks if historical is true. Setting the ID to the latest historical task's
+            // ID, unless otherwise specified
+            if (request.getHistorical() == true) {
                 ADTask historicalTask = getAdResponse.getHistoricalAdTask();
                 if (historicalTask == null) {
-                    logger.error("No historical task found");
-                    throw new ResourceNotFoundException("No historical task found");
-                } else {
+                    throw new ResourceNotFoundException(String.format("No historical tasks found for detector ID %s", request.getDetectorId()));
+                }
+                if (Strings.isNullOrEmpty(request.getTaskId())) {
                     request.setTaskId(historicalTask.getTaskId());
                 }
             }
 
-            // Make sure the order passed is valid. If nothing passed use default
+            // Validating the order. If nothing passed use default
             OrderType orderType;
             String orderString = request.getOrder();
             if (Strings.isNullOrEmpty(orderString)) {
@@ -267,14 +283,16 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                     orderType = OrderType.OCCURRENCE;
                 } else {
                     // No valid order type was passed, throw an error
-                    throw new IllegalArgumentException(String.format("Order %s is not a valid order", orderString));
+                    throw new IllegalArgumentException(String.format("Ordering by %s is not a valid option", orderString));
                 }
             }
             request.setOrder(orderType.getName());
 
-            // Make sure the size passed is valid. If nothing passed use default
+            // Validating the size. If nothing passed use default
             if (request.getSize() == null) {
                 request.setSize(DEFAULT_SIZE);
+            } else if (request.getSize() > MAX_SIZE) {
+                throw new IllegalArgumentException("Size cannot exceed " + MAX_SIZE);
             } else if (request.getSize() <= 0) {
                 throw new IllegalArgumentException("Size field must be a positive integer");
             }
@@ -306,10 +324,10 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
      * ActionListener class to handle bucketed search results in a paginated fashion.
      * Note that the bucket_sort aggregation is a pipeline aggregation, and is executed
      * after all non-pipeline aggregations (including the composite bucket aggregation).
-     * Because of this, the sorting is only done locally based on the buckets in the current page,
-     * and does not recognize buckets from other pages. To get around this issue, we use a max
-     * heap and add all results to the heap until there are no more buckets. This guarantees
-     * that the final set of buckets in the heap is the globally sorted set of buckets.
+     * Because of this, the sorting is only done locally based on the buckets
+     * in the current page. To get around this issue, we use a max
+     * heap and add all results to the heap until there are no more result buckets,
+     * to get the globally sorted set of result buckets.
      */
     class TopAnomalyResultListener implements ActionListener<SearchResponse> {
         private ActionListener<SearchTopAnomalyResultResponse> listener;
@@ -319,11 +337,13 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         private OrderType orderType;
         private PriorityQueue<AnomalyResultBucket> maxHeap;
 
-        TopAnomalyResultListener(ActionListener<SearchTopAnomalyResultResponse> listener,
-                                 SearchSourceBuilder searchSourceBuilder,
-                                 long expirationEpochMs,
-                                 int maxResults,
-                                 OrderType orderType) {
+        TopAnomalyResultListener(
+                ActionListener<SearchTopAnomalyResultResponse> listener,
+                SearchSourceBuilder searchSourceBuilder,
+                long expirationEpochMs,
+                int maxResults,
+                OrderType orderType
+        ) {
             this.listener = listener;
             this.searchSourceBuilder = searchSourceBuilder;
             this.expirationEpochMs = expirationEpochMs;
@@ -356,14 +376,13 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                     return;
                 }
 
-                Aggregation aggResults = aggs.get(MULTI_BUCKETS);
+                Aggregation aggResults = aggs.get(MULTI_BUCKETS_FIELD);
                 if (aggResults == null) {
                     listener.onFailure(new IllegalArgumentException("Failed to find valid aggregation result"));
                     return;
                 }
 
                 CompositeAggregation compositeAgg = (CompositeAggregation) aggResults;
-
                 List<AnomalyResultBucket> bucketResults = compositeAgg
                         .getBuckets()
                         .stream()
@@ -376,9 +395,8 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                     maxHeap.poll();
                 }
 
-                Map<String, Object> afterKey = compositeAgg.afterKey();
-
                 // If afterKey is null: we've hit the end of results. Return the results
+                Map<String, Object> afterKey = compositeAgg.afterKey();
                 if (afterKey == null) {
                     listener.onResponse(new SearchTopAnomalyResultResponse(getOrderedListFromMaxHeap(maxHeap, orderType)));
                 } else if (expirationEpochMs < clock.millis()) {
@@ -414,19 +432,14 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     }
 
     /**
-     * Generates the entire search request
+     * Generates the entire search request to pass to the search handler
      * @param request the request containing the all of the user-specified parameters needed to generate the request
      * @return the SearchRequest to pass to the SearchHandler
      */
     private SearchRequest generateSearchRequest(SearchTopAnomalyResultRequest request) {
         SearchRequest searchRequest = new SearchRequest().indices(index);
-
-        // Generate the query for the request
         QueryBuilder query = generateQuery(request);
-
-        // Generate the aggregation for the request
         AggregationBuilder aggregation = generateAggregation(request);
-
         SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder().query(query).aggregation(aggregation);
         searchRequest.source(searchSourceBuilder);
         return searchRequest;
@@ -439,16 +452,16 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
      *  2) must_not filter on task_id (because real-time results don't have a 'task_id' field associated with them in the document)
      * If fetching historical results:
      *  1) term filter on the task_id
-     * @param request the request containing the detector ID and whether or not to fetch real-time or historical results
+     *
+     * @param request the request containing the necessary fields to generate the query
      * @return the generated query as a QueryBuilder
      */
     private QueryBuilder generateQuery(SearchTopAnomalyResultRequest request) {
         BoolQueryBuilder query = new BoolQueryBuilder();
 
-        // Add these 2 filters (needed regardless of RT vs. historical)
+        // Adding the date range and anomaly grade filters (needed regardless of real-time or historical)
         RangeQueryBuilder dateRangeFilter = QueryBuilders.rangeQuery(AnomalyResult.EXECUTION_END_TIME_FIELD).gte(request.getStartTime()).lte(request.getEndTime());
-        // TODO: remove this later, set to gte for demo
-        RangeQueryBuilder anomalyGradeFilter = QueryBuilders.rangeQuery(AnomalyResult.ANOMALY_SCORE_FIELD).gte(0);
+        RangeQueryBuilder anomalyGradeFilter = QueryBuilders.rangeQuery(AnomalyResult.ANOMALY_SCORE_FIELD).gt(0);
         query.filter(dateRangeFilter).filter(anomalyGradeFilter);
 
         if (request.getHistorical() == true) {
@@ -456,17 +469,17 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             query.filter(taskIdFilter);
         } else {
             TermQueryBuilder detectorIdFilter = QueryBuilders.termQuery(AnomalyResult.DETECTOR_ID_FIELD, request.getDetectorId());
-            ExistsQueryBuilder taskIdFilter = QueryBuilders.existsQuery(AnomalyResult.TASK_ID_FIELD);
-            query.filter(detectorIdFilter).mustNot(taskIdFilter);
+            ExistsQueryBuilder taskIdExistsFilter = QueryBuilders.existsQuery(AnomalyResult.TASK_ID_FIELD);
+            query.filter(detectorIdFilter).mustNot(taskIdExistsFilter);
         }
         return query;
     }
 
     /**
      * Generates the composite aggregation.
-     * Creating a list of sources based on set of user-specified category fields, and sorting on the returned buckets
+     * Creating a list of sources based on the set of category fields, and sorting on the returned result buckets
      *
-     * @param request the request containing the all of the user-specified parameters needed to generate the request
+     * @param request the request containing the necessary fields to generate the aggregation
      * @return the generated aggregation as an AggregationBuilder
      */
     private AggregationBuilder generateAggregation(SearchTopAnomalyResultRequest request) {
@@ -482,12 +495,11 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                 .field(AnomalyResult.ANOMALY_SCORE_FIELD);
 
         // Generate the bucket sort aggregation (depends on order type)
-        OrderType orderType = request.getOrder().equals(OrderType.SEVERITY.getName()) ? OrderType.SEVERITY : OrderType.OCCURRENCE;
-        String sortField = orderType.equals((OrderType.SEVERITY)) ? AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD : COUNT_FIELD;
+        String sortField = request.getOrder().equals(OrderType.SEVERITY.getName()) ? AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD : COUNT_FIELD;
         BucketSortPipelineAggregationBuilder bucketSort = PipelineAggregatorBuilders
-                .bucketSort(BUCKET_SORT, new ArrayList<>(Arrays.asList(new FieldSortBuilder(sortField).order(SortOrder.DESC))));
+                .bucketSort(BUCKET_SORT_FIELD, new ArrayList<>(Arrays.asList(new FieldSortBuilder(sortField).order(SortOrder.DESC))));
 
-        return AggregationBuilders.composite(MULTI_BUCKETS, sources).size(PAGE_SIZE).subAggregation(maxAnomalyGradeAggregation).subAggregation(bucketSort);
+        return AggregationBuilders.composite(MULTI_BUCKETS_FIELD, sources).size(PAGE_SIZE).subAggregation(maxAnomalyGradeAggregation).subAggregation(bucketSort);
     }
 
     /**
