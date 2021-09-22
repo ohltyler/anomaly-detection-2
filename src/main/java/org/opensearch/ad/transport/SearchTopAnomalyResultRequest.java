@@ -26,21 +26,21 @@
 
 package org.opensearch.ad.transport;
 
-import java.io.IOException;
-import java.time.Instant;
-import java.util.List;
-
 import org.opensearch.action.ActionRequest;
 import org.opensearch.action.ActionRequestValidationException;
 import org.opensearch.ad.util.ParseUtils;
 import org.opensearch.common.io.stream.StreamInput;
 import org.opensearch.common.xcontent.XContentParser;
 
+import java.io.IOException;
+import java.time.Instant;
+import java.util.List;
+
 import static org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
 
 /**
  * Request for getting the top anomaly results for HC detectors.
- *
+ * <p>
  * size, category field, and order are optional, and will be set to default values if left blank
  */
 public class SearchTopAnomalyResultRequest extends ActionRequest {
@@ -80,8 +80,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest {
             String order,
             Instant startTime,
             Instant endTime
-    )
-    {
+    ) {
         super();
         this.detectorId = detectorId;
         this.taskId = taskId;
@@ -101,13 +100,21 @@ public class SearchTopAnomalyResultRequest extends ActionRequest {
         return taskId;
     }
 
-    public boolean getHistorical() { return historical; }
+    public boolean getHistorical() {
+        return historical;
+    }
 
-    public Integer getSize() { return size; }
+    public Integer getSize() {
+        return size;
+    }
 
-    public List<String> getCategoryFields() { return categoryFields; }
+    public List<String> getCategoryFields() {
+        return categoryFields;
+    }
 
-    public String getOrder() { return order; }
+    public String getOrder() {
+        return order;
+    }
 
     public Instant getStartTime() {
         return startTime;
@@ -117,17 +124,21 @@ public class SearchTopAnomalyResultRequest extends ActionRequest {
         return endTime;
     }
 
-    public void setTaskId (String taskId) { this.taskId = taskId; }
+    public void setTaskId(String taskId) {
+        this.taskId = taskId;
+    }
 
-    public void setSize (Integer size) {
+    public void setSize(Integer size) {
         this.size = size;
     }
 
-    public void setCategoryFields (List<String> categoryFields) {
+    public void setCategoryFields(List<String> categoryFields) {
         this.categoryFields = categoryFields;
     }
 
-    public void setOrder (String order) { this.order = order; }
+    public void setOrder(String order) {
+        this.order = order;
+    }
 
     @SuppressWarnings("unchecked")
     public static SearchTopAnomalyResultRequest parse(XContentParser parser, String detectorId, boolean historical) throws IOException {
@@ -170,7 +181,7 @@ public class SearchTopAnomalyResultRequest extends ActionRequest {
         }
 
         // Cast category field Object list to String list
-        List<String> convertedCategoryFields = (List<String>)(List<?>)(categoryFields);
+        List<String> convertedCategoryFields = (List<String>) (List<?>) (categoryFields);
         return new SearchTopAnomalyResultRequest(detectorId, taskId, historical, size, convertedCategoryFields, order, startTime, endTime);
     }
 

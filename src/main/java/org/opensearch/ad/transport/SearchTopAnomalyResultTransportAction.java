@@ -26,16 +26,6 @@
 
 package org.opensearch.ad.transport;
 
-import java.time.Clock;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.Arrays;
-import java.util.PriorityQueue;
-import java.util.stream.Collectors;
-
 import com.google.common.collect.ImmutableMap;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -54,8 +44,9 @@ import org.opensearch.ad.model.ADTask;
 import org.opensearch.ad.model.AnomalyResult;
 import org.opensearch.ad.model.AnomalyResultBucket;
 import org.opensearch.ad.transport.handler.ADSearchHandler;
-import org.opensearch.common.inject.Inject;
+import org.opensearch.client.Client;
 import org.opensearch.common.Strings;
+import org.opensearch.common.inject.Inject;
 import org.opensearch.index.query.BoolQueryBuilder;
 import org.opensearch.index.query.ExistsQueryBuilder;
 import org.opensearch.index.query.QueryBuilder;
@@ -79,102 +70,126 @@ import org.opensearch.search.sort.FieldSortBuilder;
 import org.opensearch.search.sort.SortOrder;
 import org.opensearch.tasks.Task;
 import org.opensearch.transport.TransportService;
-import org.opensearch.client.Client;
+
+import java.time.Clock;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.stream.Collectors;
 
 import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_INDEX_PATTERN;
 
 /**
- * Transport action to fetch top anomaly results for some HC detector. Generates a query based on user input to fetch
- * aggregated entity results.
- *
- * Example of a generated query aggregating over the "Carrier" category field, and sorting on max anomaly grade, using
- * a historical task ID:
- *
- * {
- *   "query": {
- *     "bool": {
- *       "filter": [
- *         {
- *           "range": {
- *             "execution_end_time": {
- *               "from": "2021-09-10T07:00:00.000Z",
- *               "to": "2021-09-30T07:00:00.000Z",
- *               "include_lower": true,
- *               "include_upper": true,
- *               "boost": 1.0
- *             }
- *           }
- *         },
- *         {
- *           "range": {
- *             "anomaly_score": {
- *               "from": 0,
- *               "include_lower": true,
- *               "include_upper": true,
- *               "boost": 1.0
- *             }
- *           }
- *         },
- *         {
- *           "term": {
- *             "task_id": {
- *               "value": "2AwACXwBM-RcgLq7Za87",
- *               "boost": 1.0
- *             }
- *           }
- *         }
- *       ],
- *       "adjust_pure_negative": true,
- *       "boost": 1.0
- *     }
- *   },
- *   "aggregations": {
- *     "multi_buckets": {
- *       "composite": {
- *         "size": 100,
- *         "sources": [
- *           {
- *             "Carrier": {
- *               "terms": {
- *                 "script": {
- *                   "source": "String value = null;if (params == null || params._source == null || params._source.entity == null) {return \"\"}for (item in params._source.entity) {if (item[\"name\"] == params[\"categoryField\"]) {value = item['value'];break;}}return value;",
- *                   "lang": "painless",
- *                   "params": {
- *                     "categoryField": "Carrier"
- *                   }
- *                 },
- *                 "missing_bucket": false,
- *                 "order": "asc"
- *               }
- *             }
- *           }
- *         ]
- *       },
- *       "aggregations": {
- *         "max_anomaly_grade": {
- *           "max": {
- *             "field": "anomaly_score"
- *           }
- *         },
- *         "bucket_sort": {
- *           "bucket_sort": {
- *             "sort": [
- *               {
- *                 "max_anomaly_grade": {
- *                   "order": "desc"
- *                 }
- *               }
- *             ],
- *             "from": 0,
- *             "gap_policy": "SKIP"
- *           }
- *         }
- *       }
- *     }
- *   }
- * }
+ * Transport action to fetch top anomaly results for some HC detector. Generates a
+ * query based on user input to fetch aggregated entity results.
  */
-public class SearchTopAnomalyResultTransportAction extends HandledTransportAction<SearchTopAnomalyResultRequest, SearchTopAnomalyResultResponse> {
+
+// Example of a generated query aggregating over the "Carrier" category field, and sorting on max anomaly grade, using
+// a historical task ID:
+//
+// {
+//   "query": {
+//     "bool": {
+//       "filter": [
+//         {
+//           "range": {
+//             "execution_end_time": {
+//               "from": "2021-09-10T07:00:00.000Z",
+//               "to": "2021-09-30T07:00:00.000Z",
+//               "include_lower": true,
+//               "include_upper": true,
+//               "boost": 1.0
+//             }
+//           }
+//         },
+//         {
+//           "range": {
+//             "anomaly_score": {
+//               "from": 0,
+//               "include_lower": true,
+//               "include_upper": true,
+//               "boost": 1.0
+//             }
+//           }
+//         },
+//         {
+//           "term": {
+//             "task_id": {
+//               "value": "2AwACXwBM-RcgLq7Za87",
+//               "boost": 1.0
+//             }
+//           }
+//         }
+//       ],
+//       "adjust_pure_negative": true,
+//       "boost": 1.0
+//     }
+//   },
+//   "aggregations": {
+//     "multi_buckets": {
+//       "composite": {
+//         "size": 100,
+//         "sources": [
+//           {
+//             "Carrier": {
+//               "terms": {
+//                 "script": {
+//                   "source": """
+//                      String value = null;
+//                      if (params == null || params._source == null || params._source.entity == null) {
+//                          return "";
+//                      }
+//                      for (item in params._source.entity) {
+//                          if (item["name"] == params["categoryField"]) {
+//                              value = item['value'];
+//                              break;
+//                          }
+//                      }
+//                      return value;
+//                      """,
+//                   "lang": "painless",
+//                   "params": {
+//                     "categoryField": "Carrier"
+//                   }
+//                 },
+//                 "missing_bucket": false,
+//                 "order": "asc"
+//               }
+//             }
+//           }
+//         ]
+//       },
+//       "aggregations": {
+//         "max_anomaly_grade": {
+//           "max": {
+//             "field": "anomaly_score"
+//           }
+//         },
+//         "bucket_sort": {
+//           "bucket_sort": {
+//             "sort": [
+//               {
+//                 "max_anomaly_grade": {
+//                   "order": "desc"
+//                 }
+//               }
+//             ],
+//             "from": 0,
+//             "gap_policy": "SKIP"
+//           }
+//         }
+//       }
+//     }
+//   }
+// }
+
+public class SearchTopAnomalyResultTransportAction
+        extends HandledTransportAction<SearchTopAnomalyResultRequest, SearchTopAnomalyResultResponse> {
     private ADSearchHandler searchHandler;
     // TODO: tune this to be a reasonable timeout
     private static final long TIMEOUT_IN_MILLIS = 30000;
@@ -244,7 +259,11 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             // Make sure detector is HC
             List<String> categoryFieldsFromResponse = getAdResponse.getAnomalyDetector().getCategoryField();
             if (categoryFieldsFromResponse == null || categoryFieldsFromResponse.isEmpty()) {
-                throw new IllegalArgumentException(String.format("No category fields found for detector ID %s", request.getDetectorId()));
+                throw new IllegalArgumentException(String.format(
+                        Locale.ROOT,
+                        "No category fields found for detector ID %s",
+                        request.getDetectorId())
+                );
             }
 
             // Validating the category fields. Setting the list to be all category fields,
@@ -254,7 +273,12 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             } else {
                 for (String categoryField : request.getCategoryFields()) {
                     if (!categoryFieldsFromResponse.contains(categoryField)) {
-                        throw new IllegalArgumentException(String.format("Category field %s doesn't exist for detector ID %s", categoryField, request.getDetectorId()));
+                        throw new IllegalArgumentException(String.format(
+                                Locale.ROOT,
+                                "Category field %s doesn't exist for detector ID %s",
+                                categoryField,
+                                request.getDetectorId())
+                        );
                     }
                 }
             }
@@ -264,7 +288,9 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             if (request.getHistorical() == true) {
                 ADTask historicalTask = getAdResponse.getHistoricalAdTask();
                 if (historicalTask == null) {
-                    throw new ResourceNotFoundException(String.format("No historical tasks found for detector ID %s", request.getDetectorId()));
+                    throw new ResourceNotFoundException(
+                            String.format(Locale.ROOT, "No historical tasks found for detector ID %s", request.getDetectorId())
+                    );
                 }
                 if (Strings.isNullOrEmpty(request.getTaskId())) {
                     request.setTaskId(historicalTask.getTaskId());
@@ -283,7 +309,7 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                     orderType = OrderType.OCCURRENCE;
                 } else {
                     // No valid order type was passed, throw an error
-                    throw new IllegalArgumentException(String.format("Ordering by %s is not a valid option", orderString));
+                    throw new IllegalArgumentException(String.format(Locale.ROOT, "Ordering by %s is not a valid option", orderString));
                 }
             }
             request.setOrder(orderType.getName());
@@ -294,7 +320,7 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
             } else if (request.getSize() > MAX_SIZE) {
                 throw new IllegalArgumentException("Size cannot exceed " + MAX_SIZE);
             } else if (request.getSize() <= 0) {
-                throw new IllegalArgumentException("Size field must be a positive integer");
+                throw new IllegalArgumentException("Size must be a positive integer");
             }
 
             // Generating the search request which will contain the generated query
@@ -433,6 +459,7 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
 
     /**
      * Generates the entire search request to pass to the search handler
+     *
      * @param request the request containing the all of the user-specified parameters needed to generate the request
      * @return the SearchRequest to pass to the SearchHandler
      */
@@ -448,10 +475,10 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
     /**
      * Generates the query with appropriate filters on the results indices.
      * If fetching real-time results:
-     *  1) term filter on detector_id
-     *  2) must_not filter on task_id (because real-time results don't have a 'task_id' field associated with them in the document)
+     * 1) term filter on detector_id
+     * 2) must_not filter on task_id (because real-time results don't have a 'task_id' field associated with them in the document)
      * If fetching historical results:
-     *  1) term filter on the task_id
+     * 1) term filter on the task_id
      *
      * @param request the request containing the necessary fields to generate the query
      * @return the generated query as a QueryBuilder
@@ -460,7 +487,10 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
         BoolQueryBuilder query = new BoolQueryBuilder();
 
         // Adding the date range and anomaly grade filters (needed regardless of real-time or historical)
-        RangeQueryBuilder dateRangeFilter = QueryBuilders.rangeQuery(AnomalyResult.EXECUTION_END_TIME_FIELD).gte(request.getStartTime()).lte(request.getEndTime());
+        RangeQueryBuilder dateRangeFilter = QueryBuilders
+                .rangeQuery(AnomalyResult.EXECUTION_END_TIME_FIELD)
+                .gte(request.getStartTime())
+                .lte(request.getEndTime());
         RangeQueryBuilder anomalyGradeFilter = QueryBuilders.rangeQuery(AnomalyResult.ANOMALY_SCORE_FIELD).gt(0);
         query.filter(dateRangeFilter).filter(anomalyGradeFilter);
 
@@ -495,11 +525,17 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
                 .field(AnomalyResult.ANOMALY_SCORE_FIELD);
 
         // Generate the bucket sort aggregation (depends on order type)
-        String sortField = request.getOrder().equals(OrderType.SEVERITY.getName()) ? AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD : COUNT_FIELD;
+        String sortField = request.getOrder().equals(OrderType.SEVERITY.getName())
+                ? AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD
+                : COUNT_FIELD;
         BucketSortPipelineAggregationBuilder bucketSort = PipelineAggregatorBuilders
                 .bucketSort(BUCKET_SORT_FIELD, new ArrayList<>(Arrays.asList(new FieldSortBuilder(sortField).order(SortOrder.DESC))));
 
-        return AggregationBuilders.composite(MULTI_BUCKETS_FIELD, sources).size(PAGE_SIZE).subAggregation(maxAnomalyGradeAggregation).subAggregation(bucketSort);
+        return AggregationBuilders
+                .composite(MULTI_BUCKETS_FIELD, sources)
+                .size(PAGE_SIZE)
+                .subAggregation(maxAnomalyGradeAggregation)
+                .subAggregation(bucketSort);
     }
 
     /**
@@ -510,26 +546,31 @@ public class SearchTopAnomalyResultTransportAction extends HandledTransportActio
      */
     private Script getScriptForCategoryField(String categoryField) {
         StringBuilder builder = new StringBuilder()
-        .append("String value = null;")
-        .append("if (params == null || params._source == null || params._source.entity == null) {")
-        .append("return \"\"")
-        .append("}")
-        .append("for (item in params._source.entity) {")
-        .append("if (item[\"name\"] == params[\"categoryField\"]) {")
-        .append("value = item['value'];")
-        .append("break;")
-        .append("}")
-        .append("}")
-        .append("return value;");
+                .append("String value = null;")
+                .append("if (params == null || params._source == null || params._source.entity == null) {")
+                .append("return \"\"")
+                .append("}")
+                .append("for (item in params._source.entity) {")
+                .append("if (item[\"name\"] == params[\"categoryField\"]) {")
+                .append("value = item['value'];")
+                .append("break;")
+                .append("}")
+                .append("}")
+                .append("return value;");
 
         // The last argument contains the K/V pair to inject the categoryField value into the script
-        return new Script(ScriptType.INLINE, "painless", builder.toString(), Collections.EMPTY_MAP, ImmutableMap.of("categoryField", categoryField));
+        return new Script(
+                ScriptType.INLINE,
+                "painless", builder.toString(),
+                Collections.emptyMap(),
+                ImmutableMap.of("categoryField", categoryField)
+        );
     }
 
     /**
      * Creates an ordered List from the max heap, based on the order type.
      *
-     * @param maxHeap the max heap
+     * @param maxHeap   the max heap
      * @param orderType the order type to determine how to sort the result buckets
      * @return an ordered List containing all of the elements in the max heap
      */
