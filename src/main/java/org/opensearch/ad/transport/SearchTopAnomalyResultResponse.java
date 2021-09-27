@@ -51,6 +51,10 @@ public class SearchTopAnomalyResultResponse extends ActionResponse implements To
         this.anomalyResultBuckets = anomalyResultBuckets;
     }
 
+    public List<AnomalyResultBucket> getAnomalyResultBuckets() {
+        return anomalyResultBuckets;
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeList(anomalyResultBuckets);
