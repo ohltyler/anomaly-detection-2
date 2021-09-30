@@ -98,7 +98,7 @@ import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_I
 //       "filter": [
 //         {
 //           "range": {
-//             "execution_end_time": {
+//             "data_end_time": {
 //               "from": "2021-09-10T07:00:00.000Z",
 //               "to": "2021-09-30T07:00:00.000Z",
 //               "include_lower": true,
@@ -109,7 +109,7 @@ import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_I
 //         },
 //         {
 //           "range": {
-//             "anomaly_score": {
+//             "anomaly_grade": {
 //               "from": 0,
 //               "include_lower": true,
 //               "include_upper": true,
@@ -167,7 +167,7 @@ import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_I
 //       "aggregations": {
 //         "max_anomaly_grade": {
 //           "max": {
-//             "field": "anomaly_score"
+//             "field": "anomaly_grade"
 //           }
 //         },
 //         "bucket_sort": {
@@ -194,7 +194,7 @@ public class SearchTopAnomalyResultTransportAction
     // TODO: tune this to be a reasonable timeout
     private static final long TIMEOUT_IN_MILLIS = 30000;
     // Number of buckets to return per page
-    private static final int PAGE_SIZE = 100;
+    private static final int PAGE_SIZE = 1000;
     private static final OrderType DEFAULT_ORDER_TYPE = OrderType.SEVERITY;
     private static final int DEFAULT_SIZE = 10;
     // TODO: tune this to be a reasonable max size
@@ -488,10 +488,10 @@ public class SearchTopAnomalyResultTransportAction
 
         // Adding the date range and anomaly grade filters (needed regardless of real-time or historical)
         RangeQueryBuilder dateRangeFilter = QueryBuilders
-                .rangeQuery(AnomalyResult.EXECUTION_END_TIME_FIELD)
+                .rangeQuery(AnomalyResult.DATA_END_TIME_FIELD)
                 .gte(request.getStartTime())
                 .lte(request.getEndTime());
-        RangeQueryBuilder anomalyGradeFilter = QueryBuilders.rangeQuery(AnomalyResult.ANOMALY_SCORE_FIELD).gt(0);
+        RangeQueryBuilder anomalyGradeFilter = QueryBuilders.rangeQuery(AnomalyResult.ANOMALY_GRADE_FIELD).gte(0);
         query.filter(dateRangeFilter).filter(anomalyGradeFilter);
 
         if (request.getHistorical() == true) {
@@ -522,7 +522,7 @@ public class SearchTopAnomalyResultTransportAction
         // Generate the max anomaly grade aggregation
         AggregationBuilder maxAnomalyGradeAggregation = AggregationBuilders
                 .max(AnomalyResultBucket.MAX_ANOMALY_GRADE_FIELD)
-                .field(AnomalyResult.ANOMALY_SCORE_FIELD);
+                .field(AnomalyResult.ANOMALY_GRADE_FIELD);
 
         // Generate the bucket sort aggregation (depends on order type)
         String sortField = request.getOrder().equals(OrderType.SEVERITY.getName())
