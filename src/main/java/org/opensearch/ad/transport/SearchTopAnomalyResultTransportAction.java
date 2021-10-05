@@ -111,7 +111,7 @@ import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_I
 //           "range": {
 //             "anomaly_grade": {
 //               "from": 0,
-//               "include_lower": true,
+//               "include_lower": false,
 //               "include_upper": true,
 //               "boost": 1.0
 //             }
