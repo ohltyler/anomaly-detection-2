@@ -27,10 +27,6 @@
 package org.opensearch.ad.transport;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParser;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.action.ActionListener;
@@ -83,6 +79,7 @@ import java.util.PriorityQueue;
 import java.util.stream.Collectors;
 
 import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_INDEX_PATTERN;
+import static org.opensearch.ad.settings.AnomalyDetectorSettings.TOP_ANOMALY_RESULT_TIMEOUT_IN_MILLIS;
 
 /**
  * Transport action to fetch top anomaly results for some HC detector. Generates a
@@ -191,13 +188,10 @@ import static org.opensearch.ad.indices.AnomalyDetectionIndices.ALL_AD_RESULTS_I
 public class SearchTopAnomalyResultTransportAction
         extends HandledTransportAction<SearchTopAnomalyResultRequest, SearchTopAnomalyResultResponse> {
     private ADSearchHandler searchHandler;
-    // TODO: tune this to be a reasonable timeout
-    private static final long TIMEOUT_IN_MILLIS = 30000;
     // Number of buckets to return per page
     private static final int PAGE_SIZE = 1000;
     private static final OrderType DEFAULT_ORDER_TYPE = OrderType.SEVERITY;
     private static final int DEFAULT_SIZE = 10;
-    // TODO: tune this to be a reasonable max size
     private static final int MAX_SIZE = 1000;
     private static final String index = ALL_AD_RESULTS_INDEX_PATTERN;
     private static final String COUNT_FIELD = "_count";
@@ -326,16 +320,9 @@ public class SearchTopAnomalyResultTransportAction
             // Generating the search request which will contain the generated query
             SearchRequest searchRequest = generateSearchRequest(request);
 
-            // TODO: remove these 5 lines later. Just for debugging purposes / pretty printing in console
-            JsonParser parser = new JsonParser();
-            Gson gson = new GsonBuilder().setPrettyPrinting().create();
-            JsonElement el = parser.parse(searchRequest.source().toString());
-            String prettyJson = gson.toJson(el);
-            logger.info("\n\nsearch request:\n" + prettyJson);
-
             searchHandler.search(searchRequest, new TopAnomalyResultListener(listener,
                     searchRequest.source(),
-                    clock.millis() + TIMEOUT_IN_MILLIS,
+                    clock.millis() + TOP_ANOMALY_RESULT_TIMEOUT_IN_MILLIS,
                     request.getSize(),
                     orderType));
 
