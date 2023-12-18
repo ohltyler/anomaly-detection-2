@@ -1,0 +1,166 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// plugins {
+//     id 'java'
+//     id 'jacoco'
+//     // id 'com.github.johnrengelman.shadow'
+//     id 'maven-publish'
+//     id 'com.diffplug.spotless' version '6.18.0'
+//     id 'signing'
+// }
+
+plugins {
+    id 'java'
+    id 'com.netflix.nebula.ospackage' version "11.5.0"
+    id "com.diffplug.spotless" version "6.18.0"
+    id 'java-library'
+    id 'maven-publish'
+    id 'signing'
+    id 'org.gradle.test-retry' version '1.5.4'
+    // id 'com.github.johnrengelman.shadow'
+}
+
+apply plugin: 'java'
+apply plugin: 'idea'
+apply plugin: 'jacoco'
+apply plugin: 'eclipse'
+
+repositories {
+    mavenLocal()
+    maven { url "https://aws.oss.sonatype.org/content/repositories/snapshots" }
+    mavenCentral()
+    maven { url "https://plugins.gradle.org/m2/" }
+    maven { url "https://d1nvenhzbhpy0q.cloudfront.net/snapshots/lucene/" }
+}
+
+configurations {
+    zipArchive
+}
+
+dependencies {
+    implementation rootProject
+    testImplementation rootProject
+    // implementation project(":${rootProject.name}")
+    // implementation project(path: ":${rootProject.name}", configuration: 'shadow')
+    //implementation project(path: "${rootProject.name}", configuration: 'shadow')
+
+    // TODO: testing with this is not working
+    //testCompile project(":${rootProject.name}")
+
+
+    compileOnly group: 'org.opensearch', name: 'opensearch', version: "${opensearch_version}"
+    testImplementation group: 'junit', name: 'junit', version: '4.13.2'
+    testImplementation group: 'org.mockito', name: 'mockito-core', version: '4.4.0'
+
+}
+
+spotless {
+    java {
+        removeUnusedImports()
+        importOrder 'java', 'javax', 'org', 'com'
+
+        eclipse().configFile rootProject.file('.eclipseformat.xml')
+    }
+}
+
+jacocoTestReport {
+    reports {
+        xml.required = true // for coverlay
+        html.required = true // human readable
+    }
+}
+
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            element = 'CLASS'
+            //excludes = jacocoExclusions
+            limit {
+                counter = 'BRANCH'
+                minimum = 0.60
+            }
+        }
+        rule {
+            element = 'CLASS'
+            //excludes = jacocoExclusions
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.75
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification
+jacocoTestCoverageVerification.dependsOn jacocoTestReport
+
+// shadowJar {
+//     archiveClassifier.set(null)
+// }
+
+task sourcesJar(type: Jar) {
+    archiveClassifier.set 'sources'
+    from sourceSets.main.allJava
+}
+
+task javadocJar(type: Jar) {
+    archiveClassifier.set 'javadoc'
+    from javadoc.destinationDir
+    dependsOn javadoc
+}
+
+publishing {
+    repositories {
+        maven {
+            name = 'staging'
+            url = "${rootProject.buildDir}/local-staging-repo"
+        }
+        maven {
+            name = "Snapshots"
+            url = "https://aws.oss.sonatype.org/content/repositories/snapshots"
+            credentials {
+                username "$System.env.SONATYPE_USERNAME"
+                password "$System.env.SONATYPE_PASSWORD"
+            }
+        }
+    }
+    publications {
+        shadow(MavenPublication) { publication ->
+            //project.shadow.component(publication)
+            artifact sourcesJar
+            artifact javadocJar
+
+            pom {
+                name = "OpenSearch Anomaly Detection Client"
+                packaging = "jar"
+                url = "https://github.com/opensearch-project/anomaly-detection"
+                description = "OpenSearch Anomaly Detection Client"
+                scm {
+                    connection = "scm:git@github.com:opensearch-project/anomaly-detection.git"
+                    developerConnection = "scm:git@github.com:opensearch-project/anomaly-detection.git"
+                    url = "git@github.com:opensearch-project/anomaly-detection.git"
+                }
+                licenses {
+                    license {
+                        name = "The Apache License, Version 2.0"
+                        url = "http://www.apache.org/licenses/LICENSE-2.0.txt"
+                    }
+                }
+                developers {
+                    developer {
+                        name = "OpenSearch"
+                        url = "https://github.com/opensearch-project/anomaly-detection"
+                    }
+                }
+            }
+        }
+
+    }
+
+}
+//compileJava.dependsOn(':opensearch-anomaly-detection:shadowJar')
+// delombok.dependsOn(':opensearch-ml-common:shadowJar')
